@@ -1,0 +1,22 @@
+{
+  "name": "oge-rpg",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test:world-gen": "esbuild scripts/test-world-gen.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-world-gen.cjs && node .tmp/test-world-gen.cjs",
+    "test:world-streamer": "esbuild scripts/test-world-streamer.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-world-streamer.cjs && node .tmp/test-world-streamer.cjs",
+    "test:world": "npm run test:world-gen && npm run test:world-streamer"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^7.35.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}

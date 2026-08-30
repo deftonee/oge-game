@@ -1,0 +1,680 @@
+:root {
+  --bg-slate: #10131f;
+  --panel: #1a1f33;
+  --panel-edge: #2c3455;
+  --chalk: #eef1fa;
+  --chalk-dim: #a7aecb;
+  --spell: #4fd6c8;
+  --danger: #ff6b5e;
+  --gold: #ffb020;
+  --font-display: "Segoe UI", "Trebuchet MS", system-ui, sans-serif;
+  --font-mono: "Consolas", "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-slate);
+  font-family: var(--font-display);
+  color: var(--chalk);
+}
+
+#renderCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  outline: none;
+}
+
+#ui-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#ui-root > * {
+  pointer-events: auto;
+}
+
+/* ---------- HUD ---------- */
+
+.hud {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.hud-bar-label {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-dim);
+}
+
+.hud-bar {
+  width: 220px;
+  height: 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--panel-edge);
+  overflow: hidden;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  transition: width 0.25s ease;
+}
+
+.hud-bar-fill.hp {
+  background: linear-gradient(90deg, #ff6b5e, #ffb020);
+}
+
+/* ---------- Bonfire / learning ---------- */
+
+.bonfire-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(60, 34, 10, 0.35), rgba(6, 7, 14, 0.85));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.18s ease;
+  z-index: 15;
+}
+
+.bonfire-panel {
+  width: min(520px, 90vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 2px solid var(--gold);
+  border-radius: 18px;
+  padding: 22px 26px 26px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.bonfire-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.bonfire-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.bonfire-intro {
+  font-size: 14px;
+  color: var(--chalk-dim);
+  margin-bottom: 12px;
+}
+
+.bonfire-empty {
+  font-size: 14px;
+  color: var(--chalk-dim);
+  padding: 12px 0;
+}
+
+.bonfire-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bonfire-spell-option {
+  text-align: left;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid var(--panel-edge);
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--chalk);
+  font-family: var(--font-display);
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.bonfire-spell-option:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.1);
+}
+
+.bonfire-spell-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.bonfire-spell-law {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 2px;
+}
+
+.bonfire-spell-formula {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.bonfire-stage-label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 10px;
+}
+
+.bonfire-theory {
+  margin-bottom: 14px;
+}
+
+.bonfire-law {
+  font-size: 14px;
+  color: var(--chalk-dim);
+  margin-bottom: 6px;
+}
+
+.bonfire-formula {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  border: 1px dashed var(--panel-edge);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.bonfire-success-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.hud-interact-hint {
+  position: fixed;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--spell);
+  background: rgba(16, 19, 31, 0.85);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--spell);
+  white-space: nowrap;
+}
+
+.hud-locked-hint {
+  position: fixed;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+  background: rgba(16, 19, 31, 0.85);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--gold);
+  white-space: nowrap;
+}
+
+.hud-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: var(--chalk-dim);
+  background: rgba(16, 19, 31, 0.6);
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge);
+}
+
+/* ---------- Combat overlay ---------- */
+
+.combat-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(20, 24, 40, 0.55), rgba(6, 7, 14, 0.85));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.18s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.combat-panel {
+  width: min(520px, 90vw);
+  background: var(--panel);
+  border: 2px solid var(--panel-edge);
+  border-radius: 18px;
+  padding: 24px 28px 28px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.combat-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge);
+}
+
+.combat-badge.witch {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.combat-badge.player {
+  color: var(--spell);
+  border-color: var(--spell);
+}
+
+.combat-score-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin: 6px 0 4px;
+  letter-spacing: 1px;
+}
+
+.combat-score.player {
+  color: var(--spell);
+}
+
+.combat-score.witch {
+  color: var(--danger);
+}
+
+.combat-retreat {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-edge);
+  background: transparent;
+  color: var(--chalk-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.combat-retreat:hover {
+  color: var(--chalk);
+  border-color: var(--chalk-dim);
+}
+
+.combat-result {
+  text-align: center;
+}
+
+.combat-result-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.combat-result-title.win {
+  color: var(--spell);
+}
+
+.combat-result-title.lose {
+  color: var(--danger);
+}
+
+.combat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.combat-enemy-name {
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--gold);
+}
+
+.combat-enemy-hp {
+  font-size: 12px;
+  color: var(--chalk-dim);
+}
+
+.combat-spell-name {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--spell);
+  margin-top: 10px;
+}
+
+.combat-formula {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  color: var(--chalk);
+  border: 1px dashed var(--panel-edge);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 10px 0 16px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.combat-question {
+  font-size: 16px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.combat-answer-row {
+  display: flex;
+  gap: 10px;
+}
+
+.combat-answer-input {
+  flex: 1;
+  font-size: 18px;
+  font-family: var(--font-mono);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--chalk);
+}
+
+.combat-answer-input:focus {
+  outline: none;
+  border-color: var(--spell);
+}
+
+.combat-unit {
+  align-self: center;
+  color: var(--chalk-dim);
+  font-size: 14px;
+  min-width: 48px;
+}
+
+.combat-submit {
+  margin-top: 14px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--spell);
+  color: #06231f;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+
+.combat-submit:hover {
+  filter: brightness(1.08);
+}
+
+.combat-submit:active {
+  transform: scale(0.98);
+}
+
+.combat-feedback {
+  margin-top: 12px;
+  font-size: 14px;
+  min-height: 20px;
+  font-weight: 600;
+}
+
+.combat-feedback.ok {
+  color: var(--spell);
+}
+
+.combat-feedback.fail {
+  color: var(--danger);
+}
+
+/* ---------- Spell graph ---------- */
+
+.graph-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 7, 14, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.18s ease;
+  z-index: 20;
+}
+
+.graph-panel {
+  width: min(920px, 94vw);
+  max-height: 86vh;
+  background: var(--panel);
+  border: 2px solid var(--panel-edge);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.graph-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+.graph-title {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.graph-subtitle {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 2px;
+}
+
+.graph-close {
+  background: none;
+  border: 1px solid var(--panel-edge);
+  color: var(--chalk-dim);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.graph-close:hover {
+  color: var(--chalk);
+  border-color: var(--chalk-dim);
+}
+
+.graph-body {
+  display: flex;
+  overflow: auto;
+}
+
+.graph-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.graph-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.graph-edge {
+  fill: none;
+  stroke: var(--panel-edge);
+  stroke-width: 2;
+}
+
+.graph-edge-active {
+  stroke: var(--spell);
+  stroke-width: 2.5;
+}
+
+.graph-node {
+  position: absolute;
+  border-radius: 12px;
+  border: 2px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--chalk);
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-display);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.graph-node:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.15);
+}
+
+.graph-node.locked {
+  opacity: 0.45;
+}
+
+.graph-node.unlockable {
+  border-style: dashed;
+  border-color: var(--gold);
+}
+
+.graph-node-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.graph-node-formula {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--chalk-dim);
+}
+
+.graph-node-mastery {
+  font-size: 11px;
+  color: var(--chalk-dim);
+}
+
+.graph-node-lock {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 12px;
+}
+
+.graph-detail {
+  width: 240px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--panel-edge);
+  padding: 20px;
+}
+
+.graph-detail-hint {
+  color: var(--chalk-dim);
+  font-size: 13px;
+}
+
+.graph-detail-name {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.graph-detail-law {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 4px;
+}
+
+.graph-detail-formula {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--panel-edge);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.graph-detail-status {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.graph-detail-status.ok {
+  color: var(--spell);
+}
+
+.graph-detail-status.open {
+  color: var(--gold);
+}
+
+.graph-detail-status.locked {
+  color: var(--danger);
+}
+
+.graph-detail-mastery {
+  font-size: 16px;
+  letter-spacing: 2px;
+  margin-top: 4px;
+}
+
+.graph-detail-missing {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 6px;
+}
+
+.combat-panel.shake {
+  animation: shake 0.28s ease;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-8px);
+  }
+  75% {
+    transform: translateX(8px);
+  }
+}
