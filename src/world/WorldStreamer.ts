@@ -4,6 +4,8 @@ import { WorldSpec } from "./WorldGenerator";
 import { GameState } from "../core/GameState";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
+import { PracticeTarget } from "../entities/PracticeTarget";
+import { EnergyGate } from "../entities/EnergyGate";
 
 /**
  * Держит в памяти только секцию, где сейчас игрок, и её ближайших соседей
@@ -32,21 +34,31 @@ export class WorldStreamer {
     }
   }
 
-  /** Побеждённые ведьмы отфильтровываются и здесь — на случай, если их чанк
-   * ещё не успел пересобраться после победы в текущей секции. */
+  /** Ведьмы не исчезают после победы (см. фидбэк) — побеждённые возвращаются
+   * тут же, просто в "дружелюбном" состоянии (witch.friendly === true). */
   public getActiveWitches(): Witch[] {
     const result: Witch[] = [];
-    for (const chunk of this.chunks) {
-      for (const witch of chunk.witches) {
-        if (!this.gameState.isWitchDefeated(witch.id)) result.push(witch);
-      }
-    }
+    for (const chunk of this.chunks) result.push(...chunk.witches);
     return result;
   }
 
   public getActiveBonfires(): Bonfire[] {
     const result: Bonfire[] = [];
     for (const chunk of this.chunks) result.push(...chunk.bonfires);
+    return result;
+  }
+
+  public getActivePracticeTargets(): PracticeTarget[] {
+    const result: PracticeTarget[] = [];
+    for (const chunk of this.chunks) result.push(...chunk.practiceTargets);
+    return result;
+  }
+
+  public getActiveGates(): EnergyGate[] {
+    const result: EnergyGate[] = [];
+    for (const chunk of this.chunks) {
+      if (chunk.gate) result.push(chunk.gate);
+    }
     return result;
   }
 }

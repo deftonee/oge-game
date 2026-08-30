@@ -21,6 +21,22 @@ export interface ScatterSeed {
   scale: number;
 }
 
+export type PracticeTargetKind = "tree" | "dummy" | "nettle";
+
+export interface PracticeTargetSpec {
+  id: string;
+  x: number;
+  z: number;
+  kind: PracticeTargetKind;
+}
+
+export interface GateSpec {
+  id: string;
+  requiredTier: number;
+}
+
+export type BorderStyle = "bushes" | "fence" | "mountains";
+
 export interface SectionSpec {
   index: number;
   startZ: number;
@@ -28,11 +44,14 @@ export interface SectionSpec {
   length: number;
   tier: number; // 1-3 сложность; 0 — служебная секция подхода к башне, без врагов
   color: string;
+  borderStyle: BorderStyle;
+  gateAtStart: GateSpec | null;
   witches: WitchSpec[];
   bonfires: BonfireSpec[];
+  practiceTargets: PracticeTargetSpec[];
   grass: ScatterSeed[];
-  bushesLeft: ScatterSeed[];
-  bushesRight: ScatterSeed[];
+  borderLeft: ScatterSeed[];
+  borderRight: ScatterSeed[];
 }
 
 export interface WorldSpec {
@@ -69,6 +88,12 @@ function randRange(rng: () => number, min: number, max: number): number {
 function randInt(rng: () => number, min: number, max: number): number {
   return Math.floor(randRange(rng, min, max + 1));
 }
+function pick<T>(rng: () => number, arr: readonly T[]): T {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+const BORDER_STYLES: readonly BorderStyle[] = ["bushes", "fence", "mountains"];
+const PRACTICE_KINDS: readonly PracticeTargetKind[] = ["tree", "dummy", "nettle"];
 
 /**
  * Процедурная генерация коридора (п.5 ТЗ): каждый запуск с новым seed даёт
@@ -84,27 +109,38 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   let cursorZ = -4; // буфер перед первой секцией, чтобы точка спавна стояла на полу
   const sections: SectionSpec[] = [];
   let witchCounter = 0;
+  let previousTier: number | null = null; // тир предыдущей секции — им гейтится вход в следующую
 
   for (let i = 0; i < sectionCount; i++) {
     const tier = Math.min(3, Math.floor((i / sectionCount) * 3) + 1);
     const length = randRange(rng, 12, 18);
     const startZ = cursorZ;
     const endZ = startZ + length;
+    const gateAtStart: GateSpec | null = previousTier !== null ? { id: `gate-${i}`, requiredTier: previousTier } : null;
 
     const spellPool = ALL_SPELLS.filter((s) => s.tier <= tier);
     const witchCount = randInt(rng, 1, tier === 1 ? 2 : 3);
+    const bonfireSpot = { x: randRange(rng, -1.5, 1.5), z: startZ + 2.5 };
     const witches: WitchSpec[] = [];
+    const placed: { x: number; z: number }[] = [bonfireSpot];
     for (let w = 0; w < witchCount; w++) {
       const spell = pickWeightedByWeakness(rng, spellPool, gameState);
-      witches.push({
-        id: `witch-${witchCounter++}`,
-        x: randRange(rng, -2.5, 2.5),
-        z: randRange(rng, startZ + 2, endZ - 2),
-        spellId: spell.id,
-      });
+      const pos = pickSpacedPosition(rng, startZ, endZ, placed);
+      placed.push(pos);
+      witches.push({ id: `witch-${witchCounter++}`, x: pos.x, z: pos.z, spellId: spell.id });
     }
 
-    const bonfires: BonfireSpec[] = [{ id: `bonfire-${i}`, x: randRange(rng, -1.5, 1.5), z: startZ + 2.5 }];
+    const bonfires: BonfireSpec[] = [{ id: `bonfire-${i}`, x: bonfireSpot.x, z: bonfireSpot.z }];
+
+    const practiceCount = randInt(rng, 2, 4);
+    const practiceTargets: PracticeTargetSpec[] = [];
+    for (let p = 0; p < practiceCount; p++) {
+      const pos = pickSpacedPosition(rng, startZ, endZ, placed, 2.5);
+      placed.push(pos);
+      practiceTargets.push({ id: `practice-${i}-${p}`, x: pos.x, z: pos.z, kind: pick(rng, PRACTICE_KINDS) });
+    }
+
+    const borderStyle = pick(rng, BORDER_STYLES);
 
     sections.push({
       index: i,
@@ -113,13 +149,17 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       length,
       tier,
       color: TIER_COLORS[tier] ?? TIER_COLORS[3],
+      borderStyle,
+      gateAtStart,
       witches,
       bonfires,
+      practiceTargets,
       grass: generateGrassSeeds(rng, startZ, endZ),
-      bushesLeft: generateBushSeeds(rng, startZ, endZ, -CORRIDOR_WIDTH / 2 + 0.4),
-      bushesRight: generateBushSeeds(rng, startZ, endZ, CORRIDOR_WIDTH / 2 - 0.4),
+      borderLeft: generateBorderSeeds(rng, startZ, endZ, -CORRIDOR_WIDTH / 2 + 0.4, borderStyle),
+      borderRight: generateBorderSeeds(rng, startZ, endZ, CORRIDOR_WIDTH / 2 - 0.4, borderStyle),
     });
 
+    previousTier = tier;
     cursorZ = endZ;
   }
 
@@ -127,6 +167,9 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   const approachLength = 10;
   const approachStart = cursorZ;
   const approachEnd = approachStart + approachLength;
+  const approachBorderStyle = pick(rng, BORDER_STYLES);
+  const approachGate: GateSpec | null =
+    previousTier !== null ? { id: "gate-approach", requiredTier: previousTier } : null;
   sections.push({
     index: sections.length,
     startZ: approachStart,
@@ -134,11 +177,14 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     length: approachLength,
     tier: 0,
     color: APPROACH_COLOR,
+    borderStyle: approachBorderStyle,
+    gateAtStart: approachGate,
     witches: [],
     bonfires: [],
+    practiceTargets: [],
     grass: generateGrassSeeds(rng, approachStart, approachEnd),
-    bushesLeft: generateBushSeeds(rng, approachStart, approachEnd, -CORRIDOR_WIDTH / 2 + 0.4),
-    bushesRight: generateBushSeeds(rng, approachStart, approachEnd, CORRIDOR_WIDTH / 2 - 0.4),
+    borderLeft: generateBorderSeeds(rng, approachStart, approachEnd, -CORRIDOR_WIDTH / 2 + 0.4, approachBorderStyle),
+    borderRight: generateBorderSeeds(rng, approachStart, approachEnd, CORRIDOR_WIDTH / 2 - 0.4, approachBorderStyle),
   });
   cursorZ = approachEnd;
 
@@ -148,6 +194,42 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     towerZ: cursorZ + 2,
     corridorWidth: CORRIDOR_WIDTH,
   };
+}
+
+/**
+ * Ищет позицию для ведьмы в пределах секции, отстоящую минимум на
+ * MIN_SPACING от уже размещённых точек (других ведьм и костра) — иначе они
+ * могут оказаться почти друг на друге, и отступление от одной ведьмы тут же
+ * упирается в другую (баг: "бой перезапускается мгновенно").
+ */
+const MIN_ENTITY_SPACING = 4.5;
+function pickSpacedPosition(
+  rng: () => number,
+  startZ: number,
+  endZ: number,
+  placed: { x: number; z: number }[],
+  minSpacing: number = MIN_ENTITY_SPACING
+): { x: number; z: number } {
+  const ATTEMPTS = 20;
+  let best: { x: number; z: number } | null = null;
+  let bestMinDist = -Infinity;
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const candidate = { x: randRange(rng, -2.5, 2.5), z: randRange(rng, startZ + 2, endZ - 2) };
+    let minDist = Infinity;
+    for (const p of placed) {
+      const d = Math.hypot(candidate.x - p.x, candidate.z - p.z);
+      minDist = Math.min(minDist, d);
+    }
+    if (minDist >= minSpacing) return candidate;
+    if (minDist > bestMinDist) {
+      bestMinDist = minDist;
+      best = candidate;
+    }
+  }
+  // Не нашли идеальную позицию за ATTEMPTS попыток (секция тесная) —
+  // берём лучшую из найденных, это всё равно лучше чистого рандома.
+  return best!;
 }
 
 /** Чем ниже мастерство темы у игрока, тем выше шанс встретить ведьму именно с ней. */
@@ -177,12 +259,20 @@ function generateGrassSeeds(rng: () => number, startZ: number, endZ: number): Sc
   return seeds;
 }
 
-function generateBushSeeds(rng: () => number, startZ: number, endZ: number, x: number): ScatterSeed[] {
+function generateBorderSeeds(
+  rng: () => number,
+  startZ: number,
+  endZ: number,
+  x: number,
+  style: BorderStyle
+): ScatterSeed[] {
   const seeds: ScatterSeed[] = [];
+  // Забор — регулярные столбы почти без пропусков; кусты/скалы — органичнее, с разбросом.
+  const [gapMin, gapMax, jitter] = style === "fence" ? [1.6, 2.0, 0.1] : [2, 3.5, 0.25];
   let z = startZ + randRange(rng, 0.5, 2);
   while (z < endZ) {
-    seeds.push({ x: x + randRange(rng, -0.25, 0.25), z, rot: randRange(rng, 0, Math.PI * 2), scale: randRange(rng, 0.8, 1.3) });
-    z += randRange(rng, 2, 3.5);
+    seeds.push({ x: x + randRange(rng, -jitter, jitter), z, rot: randRange(rng, 0, Math.PI * 2), scale: randRange(rng, 0.8, 1.3) });
+    z += randRange(rng, gapMin, gapMax);
   }
   return seeds;
 }

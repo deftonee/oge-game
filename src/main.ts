@@ -12,11 +12,16 @@ import { Hud } from "./core/Hud";
 import { GameState } from "./core/GameState";
 import { CombatManager } from "./combat/CombatManager";
 import { LearningManager } from "./learning/LearningManager";
+import { PracticeManager } from "./practice/PracticeManager";
+import { GateManager } from "./gates/GateManager";
 import { SpellGraphScreen } from "./ui/SpellGraphScreen";
 import { generateWorld } from "./world/WorldGenerator";
 import { WorldStreamer } from "./world/WorldStreamer";
 import { buildTower } from "./world/Tower";
 import { Bonfire } from "./entities/Bonfire";
+import { Witch } from "./entities/Witch";
+import { PracticeTarget } from "./entities/PracticeTarget";
+import { EnergyGate } from "./entities/EnergyGate";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const uiRoot = document.getElementById("ui-root") as HTMLElement;
@@ -46,6 +51,12 @@ const streamer = new WorldStreamer(scene, world, gameState);
 // рядом, бой с ней повторно не запускается. Храним именно id: при возврате
 // в выгруженную секцию инстанс ведьмы пересоздаётся заново.
 let cooldownWitchId: string | null = null;
+// Дополнительная страховка: короткий общий кулдаун на ЛЮБУЮ новую встречу
+// сразу после окончания боя. Если рядом случайно оказалась вторая ведьма
+// (в паре единиц от первой), это не даст бою перезапуститься мгновенно с ней.
+let elapsedTime = 0;
+let encounterCooldownUntil = 0;
+const GLOBAL_ENCOUNTER_COOLDOWN = 1.2; // секунд
 
 // --- Игрок ---
 const player = new PlayerController(
@@ -64,21 +75,24 @@ camera.attachControl(canvas, true);
 camera.checkCollisions = false;
 camera.panningSensibility = 0; // запрет панорамирования правой кнопкой
 
-// --- HUD, бой, граф заклинаний, обучение у костра ---
+// --- HUD, бой, граф заклинаний, обучение у костра, тренировка, барьеры ---
 const hud = new Hud(uiRoot, 100);
 const spellGraph = new SpellGraphScreen(uiRoot, gameState);
 const combat = new CombatManager(uiRoot, gameState, {
   onDuelWon: (witch) => {
+    // По фидбэку: победа больше не убирает ведьму — она остаётся "дружелюбной"
+    // и с ней можно спарринговать повторно по запросу (клавиша E).
     gameState.markWitchDefeated(witch.id);
-    witch.dispose();
+    witch.setFriendly(true);
+    encounterCooldownUntil = elapsedTime + GLOBAL_ENCOUNTER_COOLDOWN;
   },
   onDuelLost: (witch) => {
-    // Ведьма остаётся в мире — можно вернуться и попробовать снова
-    // после того, как подучишь тему или выучишь новое заклинание.
     cooldownWitchId = witch.id;
+    encounterCooldownUntil = elapsedTime + GLOBAL_ENCOUNTER_COOLDOWN;
   },
   onRetreat: (witch) => {
     cooldownWitchId = witch.id;
+    encounterCooldownUntil = elapsedTime + GLOBAL_ENCOUNTER_COOLDOWN;
   },
   onPlayerDamaged: (amount) => hud.damage(amount),
 });
@@ -87,29 +101,57 @@ const learning = new LearningManager(uiRoot, gameState, {
     // Место для будущих эффектов/звука на изучение — пока просто состояние обновилось.
   },
 });
+const practice = new PracticeManager(uiRoot, gameState);
+const gates = new GateManager(uiRoot, gameState, {
+  onGateOpened: () => {
+    // Место для будущего эффекта "барьер рассеялся" — пока просто открыт в GameState.
+  },
+});
 
 let nearBonfire: Bonfire | null = null;
+let nearFriendlyWitch: Witch | null = null;
+let nearPracticeTarget: PracticeTarget | null = null;
+let nearGate: EnergyGate | null = null;
+
+function anyMenuOpen(): boolean {
+  return combat.isActive || spellGraph.isOpen || learning.isActive || practice.isActive || gates.isActive;
+}
 
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
-  if (key === "g" && !combat.isActive && !learning.isActive) {
+  if (key === "g" && !anyMenuOpen()) {
     spellGraph.toggle();
   } else if (key === "escape") {
     if (spellGraph.isOpen) spellGraph.close();
     if (learning.isActive) learning.close();
-  } else if (key === "e" && nearBonfire && !combat.isActive && !spellGraph.isOpen) {
-    if (learning.isActive) learning.close();
-    else learning.open();
+    if (practice.isActive) practice.close();
+    if (gates.isActive) gates.close();
+  } else if (key === "e" && !combat.isActive && !spellGraph.isOpen) {
+    if (nearGate) {
+      if (gates.isActive) gates.close();
+      else gates.open(nearGate);
+    } else if (nearBonfire) {
+      if (learning.isActive) learning.close();
+      else learning.open();
+    } else if (nearFriendlyWitch) {
+      combat.startEncounter(nearFriendlyWitch);
+    } else if (nearPracticeTarget) {
+      if (practice.isActive) practice.close();
+      else practice.open();
+    }
   }
 });
 
 const ENCOUNTER_RADIUS = 2.0;
 const BONFIRE_RADIUS = 2.5;
+const PRACTICE_RADIUS = 2.2;
+const GATE_RADIUS = 2.5;
 
 engine.runRenderLoop(() => {
   const dt = engine.getDeltaTime() / 1000;
+  elapsedTime += dt;
 
-  const menuOpen = combat.isActive || spellGraph.isOpen || learning.isActive;
+  const menuOpen = anyMenuOpen();
   player.inputLocked = menuOpen;
 
   const forward = camera.getDirection(Vector3.Forward());
@@ -125,22 +167,49 @@ engine.runRenderLoop(() => {
   if (!menuOpen) {
     const bonfires = streamer.getActiveBonfires();
     const witches = streamer.getActiveWitches();
+    const practiceTargets = streamer.getActivePracticeTargets();
+    const activeGates = streamer.getActiveGates();
 
-    // Костры: игрок сам решает подойти (клавиша E), поэтому только проверяем дистанцию
-    nearBonfire = null;
-    for (const bonfire of bonfires) {
-      if (Vector3.Distance(bonfire.position, player.position) <= BONFIRE_RADIUS) {
-        nearBonfire = bonfire;
+    // Барьеры между секциями: физически блокируют проход (коллизия),
+    // разрушаются по E выбором подходящего заклинания — см. GateManager.
+    nearGate = null;
+    for (const gate of activeGates) {
+      if (gate.opened) continue;
+      if (Vector3.Distance(gate.position, player.position) <= GATE_RADIUS) {
+        nearGate = gate;
         break;
       }
     }
-    hud.setInteractHint(nearBonfire ? "Нажми E — сесть у костра" : null);
 
-    // Ведьмы: встреча начинается автоматически при подходе
+    // Костры: игрок сам решает подойти (клавиша E), поэтому только проверяем дистанцию
+    nearBonfire = null;
+    if (!nearGate) {
+      for (const bonfire of bonfires) {
+        if (Vector3.Distance(bonfire.position, player.position) <= BONFIRE_RADIUS) {
+          nearBonfire = bonfire;
+          break;
+        }
+      }
+    }
+
+    // Ведьмы: дружелюбные (уже побеждённые) — по E на спарринг; враждебные —
+    // автоматически при подходе (если тема изучена) или подсказка (если нет)
+    nearFriendlyWitch = null;
     let lockedHint: string | null = null;
-    if (!nearBonfire) {
+    if (!nearGate && !nearBonfire) {
+      const cooldownActive = elapsedTime < encounterCooldownUntil;
       for (const witch of witches) {
         const dist = Vector3.Distance(witch.position, player.position);
+
+        if (witch.friendly) {
+          if (dist <= ENCOUNTER_RADIUS) {
+            nearFriendlyWitch = witch;
+            break;
+          }
+          continue;
+        }
+
+        if (cooldownActive) continue;
 
         if (witch.id === cooldownWitchId) {
           if (dist > ENCOUNTER_RADIUS + 0.5) cooldownWitchId = null;
@@ -158,6 +227,29 @@ engine.runRenderLoop(() => {
       }
     }
     hud.setLockedHint(lockedHint);
+
+    // Объекты для практики — тоже по E, но только если рядом нет ничего важнее
+    nearPracticeTarget = null;
+    if (!nearGate && !nearBonfire && !nearFriendlyWitch) {
+      for (const target of practiceTargets) {
+        if (Vector3.Distance(target.position, player.position) <= PRACTICE_RADIUS) {
+          nearPracticeTarget = target;
+          break;
+        }
+      }
+    }
+
+    hud.setInteractHint(
+      nearGate
+        ? `Нажми E — барьер требует заклинание уровня ${nearGate.requiredTier}+`
+        : nearBonfire
+        ? "Нажми E — сесть у костра"
+        : nearFriendlyWitch
+        ? "Нажми E — спарринг с побеждённой ведьмой"
+        : nearPracticeTarget
+        ? "Нажми E — потренироваться"
+        : null
+    );
   } else {
     hud.setInteractHint(null);
     hud.setLockedHint(null);

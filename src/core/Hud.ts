@@ -22,7 +22,7 @@ export class Hud {
 
     const hint = document.createElement("div");
     hint.className = "hud-hint";
-    hint.textContent = "WASD — движение · мышь — камера · G — граф заклинаний · E — костёр рядом";
+    hint.textContent = "WASD — движение · мышь — камера · G — граф заклинаний · E — взаимодействие рядом";
     uiRoot.appendChild(hint);
 
     const lockedHint = document.createElement("div");

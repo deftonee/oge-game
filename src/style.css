@@ -205,6 +205,27 @@ body {
   margin-bottom: 10px;
 }
 
+/* ---------- Energy gate ---------- */
+
+.gate-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(120, 200, 255, 0.12), rgba(6, 7, 14, 0.85));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.18s ease;
+  z-index: 15;
+}
+
+.gate-panel {
+  border-color: #8fd1ff;
+}
+
+.gate-title {
+  color: #8fd1ff;
+}
+
 .hud-interact-hint {
   position: fixed;
   bottom: 56px;

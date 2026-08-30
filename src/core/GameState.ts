@@ -14,6 +14,7 @@ export const MAX_MASTERY = 5;
 export class GameState {
   private progress = new Map<string, SpellProgress>();
   private defeatedWitchIds = new Set<string>();
+  private openedGateIds = new Set<string>();
 
   constructor() {
     for (const spell of ALL_SPELLS) {
@@ -43,6 +44,14 @@ export class GameState {
 
   public isWitchDefeated(witchId: string): boolean {
     return this.defeatedWitchIds.has(witchId);
+  }
+
+  public openGate(gateId: string): void {
+    this.openedGateIds.add(gateId);
+  }
+
+  public isGateOpen(gateId: string): boolean {
+    return this.openedGateIds.has(gateId);
   }
 
   public learn(spellId: string): void {
