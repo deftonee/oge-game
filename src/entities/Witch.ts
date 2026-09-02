@@ -1,13 +1,14 @@
 import {
-  Scene,
-  Vector3,
-  MeshBuilder,
-  StandardMaterial,
   Color3,
-  TransformNode,
   Mesh,
+  MeshBuilder,
+  Scene,
+  StandardMaterial,
+  TransformNode,
+  Vector3,
 } from "@babylonjs/core";
 import { Spell } from "../data/spells";
+import { createWitchFigure, WitchFigure, WitchExpression } from "./witchFigure";
 
 /**
  * Враг-ведьма. У ведьмы одна "тема атаки" (spell) — заклинаниями этой темы
@@ -18,71 +19,56 @@ import { Spell } from "../data/spells";
  * После победы ведьма не исчезает (по фидбэку), а становится "дружелюбной":
  * снимает шляпу, светлеет и больше не атакует сама — но с ней можно снова
  * спарринговать по запросу (клавиша E), см. main.ts.
+ *
+ * Модель — процедурная фигурка из witchFigure.ts: idle-покачивание рук,
+ * взмах посохом, мимика. Мимика привязана к состоянию: враждебная — grumpy,
+ * дружелюбная — happy.
  */
+
+/** Фигурка ~4.25 в модельных единицах, старая модель была ~2.55. */
+const WITCH_SCALE = 0.6;
+/** Маркер дружелюбности в модельных координатах — над кончиком шляпы. */
+const MARKER_LOCAL_Y = 4.4;
+/** Локальный диаметр маркера: в мировых единицах 0.3 * WITCH_SCALE ≈ 0.18. */
+const MARKER_LOCAL_DIAMETER = 0.3;
+
 export class Witch {
   public readonly root: TransformNode;
   public readonly spell: Spell;
   public readonly id: string;
   public friendly: boolean;
 
-  private readonly robeMat: StandardMaterial;
-  private readonly hat: Mesh;
+  private readonly figure: WitchFigure;
   private readonly friendlyMarker: Mesh;
+  private readonly friendlyMarkerMat: StandardMaterial;
 
   constructor(scene: Scene, position: Vector3, spell: Spell, id: string, initialFriendly = false) {
     this.id = id;
     this.spell = spell;
     this.friendly = initialFriendly;
 
-    const built = this.buildModel(scene, spell.color);
-    this.root = built.root;
-    this.robeMat = built.robeMat;
-    this.hat = built.hat;
-    this.friendlyMarker = built.friendlyMarker;
+    this.figure = createWitchFigure(scene, {
+      namePrefix: id,
+      robeColor: Color3.FromHexString(spell.color),
+      scale: WITCH_SCALE,
+    });
+    this.root = this.figure.root;
     this.root.position = position;
-
-    if (initialFriendly) this.applyFriendlyVisual();
-  }
-
-  private buildModel(
-    scene: Scene,
-    colorHex: string
-  ): { root: TransformNode; robeMat: StandardMaterial; hat: Mesh; friendlyMarker: Mesh } {
-    const root = new TransformNode("witch", scene);
-
-    const robeMat = new StandardMaterial("robeMat", scene);
-    robeMat.diffuseColor = Color3.FromHexString(colorHex);
-
-    const hatMat = new StandardMaterial("hatMat", scene);
-    hatMat.diffuseColor = Color3.FromHexString("#1a1f33");
-
-    const robe = MeshBuilder.CreateCylinder("robe", { diameterTop: 0.5, diameterBottom: 0.9, height: 1.4 }, scene);
-    robe.material = robeMat;
-    robe.position.y = 0.9;
-    robe.parent = root;
-
-    const head = MeshBuilder.CreateSphere("witchHead", { diameter: 0.45 }, scene);
-    head.material = robeMat;
-    head.position.y = 1.75;
-    head.parent = root;
-
-    const hat = MeshBuilder.CreateCylinder("witchHat", { diameterTop: 0, diameterBottom: 0.4, height: 0.6 }, scene);
-    hat.material = hatMat;
-    hat.position.y = 2.25;
-    hat.parent = root;
 
     // Маленький зелёный огонёк над головой — виден только когда ведьма
     // дружелюбна, сигнализирует издалека "с этой можно спарринговать".
-    const markerMat = new StandardMaterial("friendlyMarkerMat", scene);
-    markerMat.diffuseColor = Color3.FromHexString("#7be08a");
-    markerMat.emissiveColor = Color3.FromHexString("#4fd66a");
-    const friendlyMarker = MeshBuilder.CreateSphere("friendlyMarker", { diameter: 0.18 }, scene);
-    friendlyMarker.material = markerMat;
-    friendlyMarker.position.y = 2.5;
-    friendlyMarker.parent = root;
-    friendlyMarker.setEnabled(false);
+    this.friendlyMarkerMat = new StandardMaterial(`${id}_friendlyMarkerMat`, scene);
+    this.friendlyMarkerMat.diffuseColor = Color3.FromHexString("#7be08a");
+    this.friendlyMarkerMat.emissiveColor = Color3.FromHexString("#4fd66a");
+    this.friendlyMarker = MeshBuilder.CreateSphere(`${id}_friendlyMarker`, { diameter: MARKER_LOCAL_DIAMETER }, scene);
+    this.friendlyMarker.material = this.friendlyMarkerMat;
+    this.friendlyMarker.position.y = MARKER_LOCAL_Y;
+    this.friendlyMarker.parent = this.root;
+    this.friendlyMarker.setEnabled(false);
 
-    return { root, robeMat, hat, friendlyMarker };
+    this.figure.playIdle();
+    if (initialFriendly) this.applyFriendlyVisual();
+    else this.applyHostileVisual();
   }
 
   /** Победа больше не убирает ведьму из мира — она остаётся, но перестаёт нападать. */
@@ -92,16 +78,21 @@ export class Witch {
     else this.applyHostileVisual();
   }
 
-  private applyFriendlyVisual(): void {
-    this.hat.setEnabled(false);
-    this.friendlyMarker.setEnabled(true);
-    this.robeMat.diffuseColor = Color3.Lerp(this.robeMat.diffuseColor, Color3.White(), 0.55);
+  public playIdle(): void {
+    this.figure.playIdle();
   }
 
-  private applyHostileVisual(): void {
-    this.hat.setEnabled(true);
-    this.friendlyMarker.setEnabled(false);
-    this.robeMat.diffuseColor = Color3.FromHexString(this.spell.color);
+  public stopIdle(): void {
+    this.figure.stopIdle();
+  }
+
+  /** Взмах посохом (рандомизирован), после завершения idle возобновляется. */
+  public swingStaff(onComplete?: () => void): void {
+    this.figure.swingStaff(onComplete);
+  }
+
+  public setExpression(name: WitchExpression, frames?: number): void {
+    this.figure.setExpression(name, frames);
   }
 
   public get position(): Vector3 {
@@ -109,6 +100,21 @@ export class Witch {
   }
 
   public dispose(): void {
-    this.root.dispose();
+    this.figure.dispose();
+    this.friendlyMarkerMat.dispose();
+  }
+
+  private applyFriendlyVisual(): void {
+    this.figure.hat.setEnabled(false); // сняла шляпу
+    this.friendlyMarker.setEnabled(true);
+    this.figure.robeMat.diffuseColor = Color3.Lerp(this.figure.robeMat.diffuseColor, Color3.White(), 0.55);
+    this.figure.setExpression("happy");
+  }
+
+  private applyHostileVisual(): void {
+    this.figure.hat.setEnabled(true);
+    this.friendlyMarker.setEnabled(false);
+    this.figure.robeMat.diffuseColor = Color3.FromHexString(this.spell.color);
+    this.figure.setExpression("grumpy");
   }
 }
