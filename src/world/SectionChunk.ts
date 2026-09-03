@@ -63,7 +63,7 @@ export class SectionChunk {
 
     if (this.spec.gateAtStart && !gameState.isGateOpen(this.spec.gateAtStart.id)) {
       const g = this.spec.gateAtStart;
-      const gate = new EnergyGate(this.scene, this.spec.startZ, g.id, g.requiredTier);
+      const gate = new EnergyGate(this.scene, this.spec.startZ, g.id, g.requiredSpells);
       this.gate = gate;
       this.disposables.push(gate);
     }

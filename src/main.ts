@@ -10,7 +10,7 @@ import {
 import { PlayerController } from "./core/PlayerController";
 import { Hud } from "./core/Hud";
 import { GameState } from "./core/GameState";
-import { CombatManager } from "./combat/CombatManager";
+import { CombatManager, DEFAULT_ROUNDS_TO_WIN } from "./combat/CombatManager";
 import { LearningManager } from "./learning/LearningManager";
 import { PracticeManager } from "./practice/PracticeManager";
 import { GateManager } from "./gates/GateManager";
@@ -57,6 +57,15 @@ let cooldownWitchId: string | null = null;
 let elapsedTime = 0;
 let encounterCooldownUntil = 0;
 const GLOBAL_ENCOUNTER_COOLDOWN = 1.2; // секунд
+
+// Баланс дуэлей: индекс секции -> сколько успешных ударов нужно игроку для
+// победы. Первая секция — тренировочная, хватает одного попадания.
+const ROUNDS_TO_WIN_BY_SECTION: Readonly<Record<number, number>> = { 0: 1 };
+
+function duelRoundsToWin(): number {
+  const sectionIndex = streamer.sectionIndexOf(player.position.z);
+  return ROUNDS_TO_WIN_BY_SECTION[sectionIndex] ?? DEFAULT_ROUNDS_TO_WIN;
+}
 
 // --- Игрок ---
 const player = new PlayerController(
@@ -134,7 +143,7 @@ window.addEventListener("keydown", (e) => {
       if (learning.isActive) learning.close();
       else learning.open();
     } else if (nearFriendlyWitch) {
-      combat.startEncounter(nearFriendlyWitch);
+      combat.startEncounter(nearFriendlyWitch, duelRoundsToWin());
     } else if (nearPracticeTarget) {
       if (practice.isActive) practice.close();
       else practice.open();
@@ -218,7 +227,7 @@ engine.runRenderLoop(() => {
 
         if (dist <= ENCOUNTER_RADIUS) {
           if (gameState.isLearned(witch.spell.id)) {
-            combat.startEncounter(witch);
+            combat.startEncounter(witch, duelRoundsToWin());
           } else {
             lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: клавиша G)`;
           }
@@ -241,7 +250,7 @@ engine.runRenderLoop(() => {
 
     hud.setInteractHint(
       nearGate
-        ? `Нажми E — барьер требует заклинание уровня ${nearGate.requiredTier}+`
+        ? `Нажми E — барьер: нужно ${nearGate.requiredSpells} изученных тем`
         : nearBonfire
         ? "Нажми E — сесть у костра"
         : nearFriendlyWitch

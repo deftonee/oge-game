@@ -3,6 +3,8 @@ import { generateWorld } from "../src/world/WorldGenerator";
 import { WorldStreamer } from "../src/world/WorldStreamer";
 import { GameState } from "../src/core/GameState";
 
+declare const process: { exit(code?: number): never };
+
 let failures = 0;
 function check(cond: boolean, msg: string) {
   if (!cond) {
@@ -47,7 +49,8 @@ check(
 );
 
 // Побеждаем первую попавшуюся ведьму, уходим далеко вперёд и возвращаемся —
-// она не должна возникнуть заново.
+// она должна сохраниться в мире, но стать дружелюбной (по фидбэку победа не
+// убирает ведьму, а снимает с неё враждебность).
 streamer.update(world.spawnPoint.z);
 const target = streamer.getActiveWitches()[0];
 check(!!target, "должна быть хотя бы одна ведьма у старта для теста на побед/пересборку");
@@ -55,8 +58,9 @@ if (target) {
   gameState.markWitchDefeated(target.id);
   streamer.update(lastSection.endZ - 1); // уходим в конец мира — секция старта выгружается
   streamer.update(world.spawnPoint.z); // возвращаемся — секция старта пересобирается
-  const stillThere = streamer.getActiveWitches().some((w) => w.id === target.id);
-  check(!stillThere, `побеждённая ведьма ${target.id} не должна появляться снова после пересборки секции`);
+  const respawned = streamer.getActiveWitches().find((w) => w.id === target.id);
+  check(!!respawned, `побеждённая ведьма ${target.id} должна сохраниться в мире после пересборки`);
+  check(respawned?.friendly === true, `побеждённая ведьма ${target.id} должна быть дружелюбной после пересборки`);
 }
 
 if (failures === 0) {

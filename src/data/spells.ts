@@ -1,6 +1,31 @@
-// Модель данных для заклинаний (законов физики) и задач к ним.
-// В минимальном срезе — один изученный спелл с банком простых вопросов.
-// Дальше (этап 4-5) сюда добавится граф с prerequisites и уровнями мастерства.
+// Модель данных заклинаний и школ. Данные — JSON-файлы в ./spells/*.json:
+//   schools.json — метаданные школ (веток прокачки),
+//   <school>.json — файл на школу со спеллами (добавил файл → появилась школа).
+// Валидация всего набора происходит один раз при загрузке модуля и падает
+// с понятной ошибкой (файл + спелл), а не молча.
+//
+// Каждое заклинание имеет ПУЛ вопросов и БАНКИ РОЛЕЙ — какие вопросы из пула
+// используются в каком сценарии:
+//   attackWitch  — атака ведьмы в дуэли (нужно только боевым темам),
+//   defendWitch  — защита от атаки ведьмы её же темой (обязателен всем),
+//   staticTarget — тренировка у чучела/дерева/крапивы и пробитие барьера (обязателен всем).
+// Роль без банка = заклинание неприменимо в этом сценарии (fallback не делаем).
+
+import schoolsJson from "./spells/schools.json";
+import earthJson from "./spells/earth.json";
+import fireJson from "./spells/fire.json";
+
+// ---------- Типы ----------
+
+export type QuestionRole = "attackWitch" | "defendWitch" | "staticTarget";
+
+export const QUESTION_ROLES: readonly QuestionRole[] = ["attackWitch", "defendWitch", "staticTarget"];
+
+export const ROLE_LABELS: Record<QuestionRole, string> = {
+  attackWitch: "⚔️ атака ведьмы",
+  defendWitch: "🛡️ защита от ведьмы",
+  staticTarget: "🎯 тренировка у цели",
+};
 
 export interface SpellQuestion {
   id: string;
@@ -10,196 +35,279 @@ export interface SpellQuestion {
   unit: string; // единица измерения для подсказки игроку
 }
 
+export interface TutorialQuestions {
+  simple: SpellQuestion; // этап 1 у костра: простейший пример на новую формулу
+  harder: SpellQuestion; // этап 2 у костра: усложнённая задача (доп. шаг/конверсия единиц)
+}
+
+/** Банк ролей: роль -> id вопросов из пула заклинания. */
+export type QuestionBank = Partial<Record<QuestionRole, string[]>>;
+
 export interface Spell {
   id: string;
   name: string; // как называется заклинание в игре
   law: string; // человекочитаемое название закона физики
   formula: string; // формула, которая показывается игроку
-  color: string; // акцентный цвет заклинания (для эффектов и UI)
-  tier: number; // 1 — самое простое, дальше сложнее (для раскладки графа)
+  color: string; // акцентный цвет (эффекты и UI)
+  tier: number; // порядок изучения ВНУТРИ школы (1 — самое простое)
+  school: string; // основная школа (ид)
+  schools: string[]; // все школы, которым принадлежит заклинание; >1 — мост
   prerequisites: string[]; // id заклинаний, которые нужно изучить раньше
-  tutorial: {
-    simple: SpellQuestion; // этап 1 у костра: простейший пример на новую формулу
-    harder: SpellQuestion; // этап 2 у костра: усложнённая задача (доп. шаг/конверсия единиц)
-  };
-  questions: SpellQuestion[]; // банк вопросов для боя (после того как заклинание изучено)
+  tutorial: TutorialQuestions;
+  questions: SpellQuestion[]; // пул вопросов заклинания
+  banks: QuestionBank; // какие вопросы пула в какой роли используются
 }
 
-// --- Тир 1: стартовые темы, без пререквизитов ---
+export interface School {
+  id: string;
+  name: string; // «Школа земли»
+  pathName: string; // «Путь Странника»
+  icon: string; // эмодзи для UI
+  color: string; // акцентный цвет ветки
+  element: string; // образ раздела (для подсказок)
+  description: string;
+  unlockRule?: { bridges: number }; // сколько мостов нужно выучить, чтобы открыть школу
+}
 
-const SPELL_VELOCITY: Spell = {
-  id: "velocity",
-  name: "Стрела Скорости",
-  law: "Равномерное прямолинейное движение",
-  formula: "v = s / t",
-  color: "#4fd6c8",
-  tier: 1,
-  prerequisites: [],
-  tutorial: {
-    simple: { id: "v-t1", text: "Тело прошло путь 6 м за 3 с. Найди скорость.", answer: 2, tolerance: 0.01, unit: "м/с" },
-    harder: {
-      id: "v-t2",
-      text: "Автомобиль едет со скоростью 90 км/ч. Сколько метров он проедет за 10 секунд? (переведи км/ч в м/с)",
-      answer: 250,
-      tolerance: 1,
-      unit: "м",
-    },
-  },
-  questions: [
-    { id: "v1", text: "Тело прошло путь 10 м за 2 с. Найди скорость.", answer: 5, tolerance: 0.01, unit: "м/с" },
-    { id: "v2", text: "Поезд прошёл 120 км за 2 часа. Найди скорость.", answer: 60, tolerance: 0.5, unit: "км/ч" },
-    { id: "v3", text: "Скорость тела 4 м/с, время движения 5 с. Найди путь.", answer: 20, tolerance: 0.01, unit: "м" },
-    { id: "v4", text: "Путь 100 м, скорость 25 м/с. За сколько секунд пройден путь?", answer: 4, tolerance: 0.01, unit: "с" },
-  ],
-};
+// ---------- Сырые JSON-структуры (валидируются ниже) ----------
 
-const SPELL_DENSITY: Spell = {
-  id: "density",
-  name: "Зов Плотности",
-  law: "Плотность вещества",
-  formula: "ρ = m / V",
-  color: "#8fd14f",
-  tier: 1,
-  prerequisites: [],
-  tutorial: {
-    simple: { id: "d-t1", text: "Масса тела 20 г, объём 4 см³. Найди плотность.", answer: 5, tolerance: 0.01, unit: "г/см³" },
-    harder: {
-      id: "d-t2",
-      text: "Кусок металла объёмом 50 см³ имеет плотность 8 г/см³. Найди массу в килограммах (переведи граммы в кг).",
-      answer: 0.4,
-      tolerance: 0.01,
-      unit: "кг",
-    },
-  },
-  questions: [
-    { id: "d1", text: "Масса тела 200 г, объём 40 см³. Найди плотность.", answer: 5, tolerance: 0.01, unit: "г/см³" },
-    { id: "d2", text: "Плотность вещества 2,7 г/см³, объём 10 см³. Найди массу.", answer: 27, tolerance: 0.1, unit: "г" },
-    { id: "d3", text: "Масса бруска 500 г, плотность вещества 2,5 г/см³. Найди объём.", answer: 200, tolerance: 0.5, unit: "см³" },
-  ],
-};
+interface RawSchoolFile {
+  schools: RawSchool[];
+}
 
-// --- Тир 2: требуют изученной темы тира 1 ---
+interface RawSchool {
+  id: string;
+  name: string;
+  pathName: string;
+  icon: string;
+  color: string;
+  element?: string;
+  description?: string;
+  unlockRule?: { bridges: number };
+}
 
-const SPELL_ACCELERATION: Spell = {
-  id: "acceleration",
-  name: "Клинок Ускорения",
-  law: "Равноускоренное движение (из состояния покоя)",
-  formula: "a = v / t",
-  color: "#ff9f4f",
-  tier: 2,
-  prerequisites: ["velocity"],
-  tutorial: {
-    simple: { id: "a-t1", text: "Тело разогналось из покоя до 10 м/с за 5 с. Найди ускорение.", answer: 2, tolerance: 0.01, unit: "м/с²" },
-    harder: {
-      id: "a-t2",
-      text: "Автомобиль трогается с места и набирает скорость 72 км/ч за 4 с. Найди ускорение в м/с² (переведи км/ч в м/с).",
-      answer: 5,
-      tolerance: 0.05,
-      unit: "м/с²",
-    },
-  },
-  questions: [
-    { id: "a1", text: "Тело разогналось из покоя до 20 м/с за 4 с. Найди ускорение.", answer: 5, tolerance: 0.01, unit: "м/с²" },
-    { id: "a2", text: "Ускорение тела 2 м/с², время разгона из покоя — 5 с. Найди конечную скорость.", answer: 10, tolerance: 0.01, unit: "м/с" },
-    { id: "a3", text: "Скорость выросла с 0 до 12 м/с за 3 с. Найди ускорение.", answer: 4, tolerance: 0.01, unit: "м/с²" },
-  ],
-};
+interface RawSpellFile {
+  school: string;
+  spells: RawSpell[];
+}
 
-const SPELL_FORCE: Spell = {
-  id: "force",
-  name: "Хватка Силы",
-  law: "Второй закон Ньютона",
-  formula: "F = m · a",
-  color: "#ff6b5e",
-  tier: 2,
-  prerequisites: ["acceleration"],
-  tutorial: {
-    simple: { id: "f-t1", text: "Масса тела 3 кг, ускорение 2 м/с². Найди силу.", answer: 6, tolerance: 0.01, unit: "Н" },
-    harder: {
-      id: "f-t2",
-      text: "Тело массой 500 г получило ускорение 4 м/с². Найди силу в ньютонах (переведи граммы в кг).",
-      answer: 2,
-      tolerance: 0.05,
-      unit: "Н",
-    },
-  },
-  questions: [
-    { id: "f1", text: "Масса тела 2 кг, ускорение 3 м/с². Найди силу.", answer: 6, tolerance: 0.01, unit: "Н" },
-    { id: "f2", text: "Сила 20 Н действует на тело массой 4 кг. Найди ускорение.", answer: 5, tolerance: 0.01, unit: "м/с²" },
-    { id: "f3", text: "Масса тела 5 кг, ускорение 2 м/с². Найди силу.", answer: 10, tolerance: 0.01, unit: "Н" },
-  ],
-};
+interface RawSpell {
+  id: string;
+  name: string;
+  law: string;
+  formula: string;
+  color: string;
+  tier: number;
+  prerequisites?: string[];
+  /** Мосты: явный список школ (первая — основная). Обычные спеллы — без поля. */
+  schools?: string[];
+  tutorial: { simple: SpellQuestion; harder: SpellQuestion };
+  questions: SpellQuestion[];
+  banks: QuestionBank;
+}
 
-// --- Тир 3: сложные темы на стыке предыдущих (материал для комбо мини-боссов) ---
+// ---------- Валидация ----------
 
-const SPELL_PRESSURE: Spell = {
-  id: "pressure",
-  name: "Гнёт Давления",
-  law: "Давление твёрдых тел",
-  formula: "p = F / S",
-  color: "#b06fe0",
-  tier: 3,
-  prerequisites: ["force", "density"],
-  tutorial: {
-    simple: { id: "p-t1", text: "Сила давления 40 Н действует на площадь 2 м². Найди давление.", answer: 20, tolerance: 0.5, unit: "Па" },
-    harder: {
-      id: "p-t2",
-      text: "Груз массой 10 кг давит на опору площадью 0,5 м². Найди давление (считай g = 10 Н/кг, сначала найди силу тяжести).",
-      answer: 200,
-      tolerance: 2,
-      unit: "Па",
-    },
-  },
-  questions: [
-    { id: "p1", text: "Сила давления 100 Н действует на площадь 2 м². Найди давление.", answer: 50, tolerance: 0.5, unit: "Па" },
-    { id: "p2", text: "Давление 25 Па, площадь опоры 4 м². Найди силу давления.", answer: 100, tolerance: 1, unit: "Н" },
-    { id: "p3", text: "Сила 60 Н создаёт давление 20 Па. Найди площадь.", answer: 3, tolerance: 0.05, unit: "м²" },
-  ],
-};
+function fail(msg: string): never {
+  throw new Error(`[spells] ${msg}`);
+}
 
-const SPELL_WORK: Spell = {
-  id: "work",
-  name: "Печать Работы",
-  law: "Механическая работа",
-  formula: "A = F · s",
-  color: "#ffd24f",
-  tier: 3,
-  prerequisites: ["force"],
-  tutorial: {
-    simple: { id: "w-t1", text: "Сила 5 Н переместила тело на 4 м. Найди работу.", answer: 20, tolerance: 0.5, unit: "Дж" },
-    harder: {
-      id: "w-t2",
-      text: "Груз массой 2 кг подняли на высоту 3 м (g = 10 Н/кг). Найди работу по подъёму (сначала найди силу тяжести).",
-      answer: 60,
-      tolerance: 1,
-      unit: "Дж",
-    },
-  },
-  questions: [
-    { id: "w1", text: "Сила 10 Н переместила тело на 5 м. Найди работу.", answer: 50, tolerance: 0.5, unit: "Дж" },
-    { id: "w2", text: "Работа 100 Дж выполнена силой 20 Н. Найди пройденный путь.", answer: 5, tolerance: 0.05, unit: "м" },
-    { id: "w3", text: "Тело прошло 4 м под действием силы 15 Н. Найди работу.", answer: 60, tolerance: 0.5, unit: "Дж" },
-  ],
-};
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
 
-/** Полный граф заклинаний, отсортирован тирами от простого к сложному. */
-export const ALL_SPELLS: Spell[] = [
-  SPELL_VELOCITY,
-  SPELL_DENSITY,
-  SPELL_ACCELERATION,
-  SPELL_FORCE,
-  SPELL_PRESSURE,
-  SPELL_WORK,
-];
+function checkQuestion(q: SpellQuestion, where: string): void {
+  if (!q || typeof q.id !== "string" || q.id.length === 0) fail(`${where}: вопрос без id`);
+  if (typeof q.text !== "string" || q.text.length === 0) fail(`${where} («${q.id}»): пустой текст`);
+  if (!isFiniteNumber(q.answer)) fail(`${where} («${q.id}»): answer не число`);
+  if (!isFiniteNumber(q.tolerance) || q.tolerance < 0) fail(`${where} («${q.id}»): tolerance не число >= 0`);
+  if (typeof q.unit !== "string") fail(`${where} («${q.id}»): unit не строка`);
+}
+
+function validateSchools(raw: RawSchool[]): School[] {
+  const schools: School[] = raw.map((s, i) => {
+    const where = `schools.json[${i}] (${s?.id ?? "?"})`;
+    if (!s || typeof s.id !== "string" || !s.id) fail(`${where}: нет id`);
+    if (typeof s.name !== "string" || !s.name) fail(`${where}: нет name`);
+    if (typeof s.pathName !== "string" || !s.pathName) fail(`${where}: нет pathName`);
+    if (typeof s.color !== "string" || !s.color) fail(`${where}: нет color`);
+    const rule = s.unlockRule;
+    if (rule !== undefined && (!isFiniteNumber(rule.bridges) || !Number.isInteger(rule.bridges) || rule.bridges <= 0)) {
+      fail(`${where}: unlockRule.bridges должен быть целым > 0`);
+    }
+    return {
+      id: s.id,
+      name: s.name,
+      pathName: s.pathName,
+      icon: s.icon ?? "❔",
+      color: s.color,
+      element: s.element ?? "",
+      description: s.description ?? "",
+      ...(rule ? { unlockRule: { bridges: rule.bridges } } : {}),
+    };
+  });
+
+  const ids = new Set<string>();
+  for (const s of schools) {
+    if (ids.has(s.id)) fail(`schools.json: дубликат школы «${s.id}»`);
+    ids.add(s.id);
+  }
+  return schools;
+}
+
+/** Валидирует спеллы одного файла школы и нормализует их (schools = [primary]). */
+function validateSpellFile(file: RawSpellFile, schoolIds: Set<string>): Spell[] {
+  const where = `${file.school}.json`;
+  if (typeof file.school !== "string" || !file.school) fail(`${where}: нет поля school`);
+  if (!schoolIds.has(file.school)) fail(`${where}: школа «${file.school}» не объявлена в schools.json`);
+  if (!Array.isArray(file.spells)) fail(`${where}: нет массива spells`);
+
+  return file.spells.map((s) => {
+    const ctx = `${where} / ${s?.id ?? "?"}`;
+    if (!s || typeof s.id !== "string" || !s.id) fail(`${where}: спелл без id`);
+    for (const field of ["name", "law", "formula", "color"] as const) {
+      if (typeof s[field] !== "string" || !s[field]) fail(`${ctx}: нет поля ${field}`);
+    }
+    if (!isFiniteNumber(s.tier) || !Number.isInteger(s.tier) || s.tier < 1) fail(`${ctx}: tier должен быть целым >= 1`);
+    if (!s.tutorial || !s.tutorial.simple || !s.tutorial.harder) fail(`${ctx}: нет tutorial (simple/harder)`);
+    checkQuestion(s.tutorial.simple, `${ctx} tutorial.simple`);
+    checkQuestion(s.tutorial.harder, `${ctx} tutorial.harder`);
+    if (!Array.isArray(s.questions) || s.questions.length === 0) fail(`${ctx}: пустой пул questions`);
+    s.questions.forEach((q, i) => checkQuestion(q, `${ctx} questions[${i}]`));
+
+    // Школы: по умолчанию только своя; явный список — мост (все школы должны существовать).
+    const schools = s.schools ?? [file.school];
+    if (!Array.isArray(schools) || schools.length === 0) fail(`${ctx}: пустой список schools`);
+    if (!schools.includes(file.school)) fail(`${ctx}: schools не содержит основную школу файла «${file.school}»`);
+    for (const sc of schools) {
+      if (!schoolIds.has(sc)) fail(`${ctx}: школа «${sc}» из списка schools не объявлена в schools.json`);
+    }
+
+    const poolIds = new Set<string>();
+    for (const q of s.questions) {
+      if (poolIds.has(q.id)) fail(`${ctx}: дубликат вопроса «${q.id}» в пуле`);
+      poolIds.add(q.id);
+    }
+
+    // Обязательные роли: защита от ведьмы и тренировка у цели должны быть у каждого.
+    for (const role of ["defendWitch", "staticTarget"] as const) {
+      const bank = s.banks?.[role];
+      if (!Array.isArray(bank) || bank.length === 0) fail(`${ctx}: обязательный банк «${role}» пуст или отсутствует`);
+    }
+    for (const role of QUESTION_ROLES) {
+      const bank = s.banks?.[role];
+      if (bank === undefined) continue;
+      if (!Array.isArray(bank)) fail(`${ctx}: банк «${role}» не массив`);
+      for (const qid of bank) {
+        if (!poolIds.has(qid)) fail(`${ctx}: банк «${role}» ссылается на неизвестный вопрос «${qid}»`);
+      }
+    }
+
+    return {
+      id: s.id,
+      name: s.name,
+      law: s.law,
+      formula: s.formula,
+      color: s.color,
+      tier: s.tier,
+      school: file.school,
+      schools,
+      prerequisites: s.prerequisites ?? [],
+      tutorial: { simple: s.tutorial.simple, harder: s.tutorial.harder },
+      questions: s.questions,
+      banks: s.banks,
+    };
+  });
+}
+
+function buildRegistry(): { schools: School[]; spells: Spell[] } {
+  const schools = validateSchools((schoolsJson as RawSchoolFile).schools);
+  const schoolIds = new Set(schools.map((s) => s.id));
+
+  const fileSources: Record<string, RawSpellFile> = {
+    earth: earthJson as RawSpellFile,
+    fire: fireJson as RawSpellFile,
+  };
+  // Дополняемость: для новой школы добавляется одна строка ниже (и JSON-файл).
+
+  const spells = Object.values(fileSources).flatMap((file) => validateSpellFile(file, schoolIds));
+
+  // Глобальные проверки: уникальность id, существование пререквизитов, рефы школ мостов.
+  const byId = new Map<string, Spell>();
+  for (const s of spells) {
+    if (byId.has(s.id)) fail(`дубликат заклинания «${s.id}» между школами`);
+    byId.set(s.id, s);
+  }
+  for (const s of spells) {
+    for (const prereq of s.prerequisites) {
+      if (!byId.has(prereq)) fail(`«${s.id}»: пререквизит «${prereq}» не найден`);
+      if (prereq === s.id) fail(`«${s.id}»: пререквизит сам на себя`);
+    }
+  }
+  return { schools, spells };
+}
+
+const registry = buildRegistry();
+
+// ---------- Публичный доступ ----------
+
+/** Все школы в порядке объявления (порядок колонок в графе). */
+export const ALL_SCHOOLS: readonly School[] = registry.schools;
+
+/** Все заклинания всех школ. */
+export const ALL_SPELLS: readonly Spell[] = registry.spells;
+
+export function getSchoolById(id: string): School {
+  const school = ALL_SCHOOLS.find((s) => s.id === id);
+  if (!school) throw new Error(`[spells] Неизвестная школа: ${id}`);
+  return school;
+}
 
 export function getSpellById(id: string): Spell {
   const spell = ALL_SPELLS.find((s) => s.id === id);
-  if (!spell) throw new Error(`Unknown spell id: ${id}`);
+  if (!spell) throw new Error(`[spells] Неизвестное заклинание: ${id}`);
   return spell;
 }
 
-// С этапа 5 (костры) игрок не знает заклинаний с самого начала — даже
-// "Скорость" нужно изучить у первого костра. Массив оставлен пустым, но
-// сохранён как точка расширения (например, для будущего выбора стартовой
-// специализации).
+/** Спеллы, принадлежащие школе по ОСНОВНОЙ школе. Мост считается в своей основной. */
+export function getSpellsBySchool(schoolId: string): Spell[] {
+  return ALL_SPELLS.filter((s) => s.school === schoolId);
+}
+
+/** Мост — заклинание на стыке двух школ (schools.length > 1). */
+export function isBridgeSpell(spell: Spell): boolean {
+  return spell.schools.length > 1;
+}
+
+/** Изученные мосты нужны для открытия Школы тайн. */
+export function getBridgeSpells(): Spell[] {
+  return ALL_SPELLS.filter(isBridgeSpell);
+}
+
+export function schoolOf(spell: Spell): School {
+  return getSchoolById(spell.school);
+}
+
+/** Есть ли у заклинания вопросы для роли (роль применима в этом сценарии). */
+export function hasQuestionRole(spell: Spell, role: QuestionRole): boolean {
+  const bank = spell.banks[role];
+  return Array.isArray(bank) && bank.length > 0;
+}
+
+/** Вопросы заклинания для роли. Вызывать только если hasQuestionRole(spell, role). */
+export function questionsFor(spell: Spell, role: QuestionRole): SpellQuestion[] {
+  const bank = spell.banks[role];
+  if (!bank) return [];
+  const byId = new Map(spell.questions.map((q) => [q.id, q]));
+  const resolved: SpellQuestion[] = [];
+  for (const id of bank) {
+    const q = byId.get(id);
+    if (q) resolved.push(q);
+  }
+  return resolved;
+}
+
+// С этапа 5 (костры) игрок не знает заклинаний с самого начала. Массив оставлен
+// пустым, но сохранён как точка расширения (например, для будущего выбора
+// стартовой специализации).
 export const STARTER_SPELL_IDS: string[] = [];

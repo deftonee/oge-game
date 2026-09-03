@@ -463,6 +463,29 @@ body {
   transform: scale(0.98);
 }
 
+/* Отладочная кнопка «Решено» — видна только в dev (vite), см. src/debug/debugSolve.ts */
+.combat-solve {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px dashed var(--gold);
+  background: rgba(255, 200, 80, 0.08);
+  color: var(--gold);
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.combat-solve:hover:not(:disabled) {
+  background: rgba(255, 200, 80, 0.18);
+}
+
+.combat-solve:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .combat-feedback {
   margin-top: 12px;
   font-size: 14px;
@@ -681,6 +704,86 @@ body {
   font-size: 12px;
   color: var(--chalk-dim);
   margin-top: 6px;
+}
+
+/* ---------- Колонки школ (ветки) ---------- */
+
+.graph-school {
+  position: absolute;
+  top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.graph-school.locked {
+  opacity: 0.55;
+}
+
+.graph-school-title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.graph-school-path {
+  font-size: 11px;
+  color: var(--chalk-dim);
+  margin-top: 2px;
+}
+
+.graph-school-progress {
+  font-size: 11px;
+  color: var(--chalk-dim);
+  margin-top: 4px;
+}
+
+.graph-school-locked {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.graph-school-empty {
+  position: absolute;
+  font-size: 12px;
+  color: var(--chalk-dim);
+  line-height: 1.45;
+}
+
+/* Мост во второй школе — пунктир; сам мост — золотая рамка */
+.graph-node.ghost {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.graph-node.bridge {
+  border-style: dashed;
+}
+
+.graph-node-bridge {
+  font-size: 10px;
+  color: var(--gold);
+}
+
+.graph-detail-school {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 4px;
+}
+
+.graph-detail-roles {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Подпись школы в списках (костёр/бой/тренировка/барьер) */
+.bonfire-spell-school {
+  font-size: 10px;
+  color: var(--chalk-dim);
+  margin-top: 2px;
 }
 
 .combat-panel.shake {

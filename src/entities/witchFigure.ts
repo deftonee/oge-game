@@ -118,6 +118,64 @@ function addSurfaceNoise(mesh: Mesh, amplitude: number, frequency: number, seed:
   mesh.updateVerticesData(VertexBuffer.NormalKind, normals);
 }
 
+// Направленная (не случайная) лепка головы: сужение нижней половины
+// к подбородку + выступ подбородка вперёд-вниз только в нижне-передней
+// области. В отличие от addSurfaceNoise, здесь смещение предсказуемо
+// зависит от позиции вершины, а не от шума — так получается форма,
+// а не рябь.
+function sculptHead(mesh: Mesh, jawTaper: number, chinPush: number): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+  const indices = mesh.getIndices();
+  if (!positions || !normals || !indices) return;
+
+  for (let i = 0; i < positions.length; i += 3) {
+    let x = positions[i];
+    let y = positions[i + 1];
+    let z = positions[i + 2];
+
+    // сужение нижней половины (скулы -> подбородок), спереди и сзади одинаково
+    if (y < 0) {
+      const taper = 1 - Math.min(1, -y / 0.42) * jawTaper;
+      x *= taper;
+      z *= taper;
+    }
+
+    // выступ подбородка — только нижне-передняя четверть
+    if (y < -0.08 && z > 0.05) {
+      const vertical = Math.min(1, (-y - 0.08) / 0.3);
+      const forward = Math.min(1, (z - 0.05) / 0.3);
+      const t = vertical * forward;
+      z += t * chinPush;
+      y -= t * chinPush * 0.25;
+    }
+
+    positions[i] = x;
+    positions[i + 1] = y;
+    positions[i + 2] = z;
+  }
+
+  mesh.updateVerticesData(VertexBuffer.PositionKind, positions);
+  VertexData.ComputeNormals(positions, indices, normals);
+  mesh.updateVerticesData(VertexBuffer.NormalKind, normals);
+}
+
+// Радиус профиля тела (см. CreateLathe ниже) на заданной высоте —
+// линейная интерполяция между соседними точками профиля. Нужно, чтобы
+// привязать плечи РУК к фактической поверхности тела, а не к угаданным
+// координатам, которые рассинхронизируются при правке bodyControlPoints.
+function radiusAtHeight(profile: Vector3[], targetY: number): number {
+  for (let i = 1; i < profile.length; i++) {
+    const a = profile[i - 1];
+    const b = profile[i];
+    if (targetY >= a.y && targetY <= b.y) {
+      const t = (targetY - a.y) / Math.max(1e-6, b.y - a.y);
+      return Scalar.Lerp(a.x, b.x, t);
+    }
+  }
+  return targetY < profile[0].y ? profile[0].x : profile[profile.length - 1].x;
+}
+
 export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}): WitchFigure {
   const prefix = options.namePrefix ? `${options.namePrefix}_` : "";
   const root = new TransformNode(`${prefix}witchRoot`, scene);
@@ -197,26 +255,47 @@ export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}
   addSurfaceNoise(body, 0.025, 2.2, 11);
 
   // ================= Голова и лицо =================
-  const head = MeshBuilder.CreateSphere(`${prefix}head`, { diameter: 0.9, segments: 16, updatable: true }, scene);
-  head.position.y = 2.25;
-  head.scaling.y = 1.05;
+  // Раньше — почти шар (scaling.y всего 1.05), отсюда "круглое лицо".
+  // Теперь заметно вытянута по Y + sculptHead сужает нижнюю половину
+  // к подбородку и толкает нижне-переднюю область вперёд — получается
+  // выраженный, выступающий подбородок, а не ровный овал.
+  const head = MeshBuilder.CreateSphere(`${prefix}head`, { diameter: 0.9, segments: 20, updatable: true }, scene);
+  head.position.y = 2.22;
+  head.scaling.y = 1.3;
   head.material = skinMat;
   head.parent = root;
-  addSurfaceNoise(head, 0.012, 3.5, 27);
+  sculptHead(head, 0.55, 0.16);
+  addSurfaceNoise(head, 0.01, 3.5, 27);
 
-  const nose = MeshBuilder.CreateCylinder(`${prefix}nose`, {
-    diameterTop: 0.05,
-    diameterBottom: 0.18, // чуть шире у основания — глубже уходит в голову, шва не видно
-    height: 0.42,
-    tessellation: 12,
-    subdivisions: 3,
+  // Раньше — прямой конус (CreateCylinder), отсюда "нос-морковка".
+  // Теперь — кривая труба по сплайну с НЕ монотонным радиусом: узко у
+  // переносицы, шире на "бульбочке" ближе к концу, чуть уже на самом
+  // кончике. Плюс сама труба загибается вниз — характерный крючок.
+  const noseControlPoints = [
+    new Vector3(0, 0, 0),
+    new Vector3(0, -0.03, 0.13),
+    new Vector3(0, -0.09, 0.24),
+    new Vector3(0, -0.17, 0.32),
+    new Vector3(0, -0.23, 0.35),
+  ];
+  const nosePath = Curve3.CreateCatmullRomSpline(noseControlPoints, 5, false).getPoints();
+
+  const nose = MeshBuilder.CreateTube(`${prefix}nose`, {
+    path: nosePath,
+    radiusFunction: (i: number) => {
+      const t = i / (nosePath.length - 1);
+      return t < 0.55
+        ? Scalar.Lerp(0.05, 0.095, t / 0.55) // переносица -> бульбочка
+        : Scalar.Lerp(0.095, 0.05, (t - 0.55) / 0.45); // бульбочка -> кончик
+    },
+    tessellation: 10,
+    cap: Mesh.CAP_ALL,
     updatable: true,
   }, scene);
-  nose.rotation.x = Math.PI / 2.4;
-  nose.position = new Vector3(0, 2.17, 0.37); // на ~0.05 ближе к центру головы, чем раньше
+  nose.position = new Vector3(0, 2.24, 0.32); // основание внутри головы, шва не видно
   nose.material = noseMat;
   nose.parent = root;
-  addSurfaceNoise(nose, 0.006, 6, 63);
+  addSurfaceNoise(nose, 0.004, 8, 63);
 
   const createEye = (side: number): void => {
     const eye = MeshBuilder.CreateSphere(`${prefix}eye${side}`, { diameter: 0.09 }, scene);
@@ -274,33 +353,59 @@ export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}
   });
 
   // ================= Борода (группа) =================
-  // Самая узнаваемая деталь фигурки на фото — то, чего в чистой геометрии
-  // тела/головы не было вообще. Несколько тонких изогнутых "прядей"
-  // с небольшим случайным разбросом длины/кривизны читаются как свалянные
-  // пряди шерсти гораздо лучше одной сплошной формы.
+  // Раньше — 9 отдельных тонких прядей одинаковой толщины: между ними
+  // просвечивала кожа, особенно под подбородком — отсюда "редкая,
+  // странная". Теперь — одна сплошная "масса" (один tube по U-образному
+  // сплайну от уха до уха, толще под подбородком, тоньше у ушей), плюс
+  // всего несколько прядей поверх для лёгкой лохматости на кончике —
+  // не единственный источник формы, а акцент.
   const beard = new TransformNode(`${prefix}beard`, scene);
   beard.parent = root;
 
-  const beardStrandCount = 9;
-  for (let i = 0; i < beardStrandCount; i++) {
-    const t = i / (beardStrandCount - 1); // 0 (левый край) .. 1 (правый край)
-    const spreadX = Scalar.Lerp(-0.4, 0.4, t);
-    const lengthY = Scalar.RandomRange(0.5, 0.95); // разная длина прядей
-    const curveZ = Scalar.RandomRange(0.08, 0.22); // разный изгиб наружу
-    const startY = 2.05 - Math.abs(spreadX) * 0.35; // короче у центра (под подбородком), длиннее по бокам
+  const beardMainPoints = [
+    new Vector3(-0.34, 1.98, 0.2),
+    new Vector3(-0.22, 1.75, 0.32),
+    new Vector3(-0.1, 1.5, 0.4),
+    new Vector3(0, 1.28, 0.44), // самая нижняя точка — под подбородком
+    new Vector3(0.1, 1.5, 0.4),
+    new Vector3(0.22, 1.75, 0.32),
+    new Vector3(0.34, 1.98, 0.2),
+  ];
+  const beardMainPath = Curve3.CreateCatmullRomSpline(beardMainPoints, 8, false).getPoints();
 
+  const beardMain = MeshBuilder.CreateTube(`${prefix}beardMain`, {
+    path: beardMainPath,
+    radiusFunction: (i: number) => {
+      const t = i / (beardMainPath.length - 1);
+      const centerBias = Math.max(0, 1 - Math.abs(t - 0.5) * 2); // 0 у ушей, 1 под подбородком
+      return Scalar.Lerp(0.05, 0.2, Math.pow(centerBias, 0.75));
+    },
+    tessellation: 10,
+    cap: Mesh.CAP_ALL,
+    updatable: true,
+  }, scene);
+  beardMain.material = beardMat;
+  beardMain.parent = beard;
+  addSurfaceNoise(beardMain, 0.02, 3, 91); // лёгкая "свалянность" поверхности
+
+  const wisps = 4;
+  for (let i = 0; i < wisps; i++) {
+    const t = i / (wisps - 1);
+    const spreadX = Scalar.Lerp(-0.2, 0.2, t);
+    const lengthY = Scalar.RandomRange(0.25, 0.45);
+    const curveZ = Scalar.RandomRange(0.04, 0.12);
     const path = [
-      new Vector3(spreadX, startY, 0.34),
-      new Vector3(spreadX * 1.05, startY - lengthY * 0.5, 0.3 + curveZ * 0.6),
-      new Vector3(spreadX * 1.1, startY - lengthY, 0.22 + curveZ),
+      new Vector3(spreadX, 1.32, 0.42),
+      new Vector3(spreadX * 1.1, 1.32 - lengthY * 0.6, 0.4 + curveZ * 0.5),
+      new Vector3(spreadX * 1.2, 1.32 - lengthY, 0.34 + curveZ),
     ];
-    const strand = MeshBuilder.CreateTube(`${prefix}beardStrand${i}`, {
+    const wisp = MeshBuilder.CreateTube(`${prefix}beardWisp${i}`, {
       path,
-      radiusFunction: (idx: number) => 0.03 * (1 - idx / 12), // сужается к кончику
+      radiusFunction: (idx: number) => 0.025 * (1 - idx / 12),
       tessellation: 6,
     }, scene);
-    strand.material = beardMat;
-    strand.parent = beard;
+    wisp.material = beardMat;
+    wisp.parent = beard;
   }
 
   // ================= Шляпа (группа) =================
@@ -354,10 +459,30 @@ export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}
     handLocalPos: Vector3;
   }
 
+  // Раньше x-координата плеча (0.58*side) была угадана и не совпадала с
+  // реальной шириной корпуса на этой высоте — рука визуально висела в
+  // воздухе, оторванная от тела. Берём фактический радиус профиля тела.
+  const shoulderY = 1.55;
+  const shoulderRadius = radiusAtHeight(bodyProfile, shoulderY);
+
+  // Правая рука (держит посох) в состоянии покоя чуть отведена в
+  // сторону — иначе длинная трость задевает шляпу.
+  const armRestZ: Record<number, number> = { [-1]: -0.08, [1]: 0.24 };
+
   const createArm = (side: number): ArmRig => {
     const pivot = new TransformNode(`${prefix}armPivot${side}`, scene);
-    pivot.position = new Vector3(0.58 * side, 1.75, 0.05);
+    pivot.position = new Vector3(shoulderRadius * 0.82 * side, shoulderY, shoulderRadius * 0.35);
+    pivot.rotation.z = armRestZ[side];
     pivot.parent = root;
+
+    // Небольшой "нарост" плеча в точке стыка — скрывает шов между
+    // рукавом-трубой и корпусом (та же идея, что с носом на голове).
+    const shoulderCap = MeshBuilder.CreateSphere(`${prefix}shoulderCap${side}`, {
+      diameter: shoulderRadius * 0.85,
+    }, scene);
+    shoulderCap.position = pivot.position.clone();
+    shoulderCap.material = robeMat;
+    shoulderCap.parent = root;
 
     const path = [
       new Vector3(0, 0, 0),
@@ -385,13 +510,22 @@ export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}
   staffPivot.parent = rightArm.pivot;
   staffPivot.position = rightArm.handLocalPos.clone();
 
+  // Раньше position.y=-0.9 при height=1.9 закапывало ~90% трости под
+  // пол (видна была только короткая "культя" у кисти — отсюда "мелкая").
+  // Теперь длина и положение считаются от примерной мировой высоты
+  // кисти, чтобы низ доставал почти до пола, а верх — выше плеча.
+  const handWorldY = shoulderY - 0.74 * Math.cos(armRestZ[1]);
+  const staffBottomWorldY = 0.04; // чуть выше пола, без z-fighting
+  const staffTopWorldY = shoulderY + 0.4; // заметно выше плеча
+  const staffHeight = staffTopWorldY - staffBottomWorldY;
+
   const staff = MeshBuilder.CreateCylinder(`${prefix}staff`, {
-    diameterTop: 0.035,
-    diameterBottom: 0.05,
-    height: 1.9,
+    diameterTop: 0.05,
+    diameterBottom: 0.075,
+    height: staffHeight,
     tessellation: 8,
   }, scene);
-  staff.position.y = -0.9;
+  staff.position.y = (staffBottomWorldY + staffTopWorldY) / 2 - handWorldY;
   staff.material = woodMat;
   staff.parent = staffPivot;
 
@@ -486,8 +620,8 @@ export function createWitchFigure(scene: Scene, options: WitchFigureOptions = {}
       Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
     animZ.setKeys([
       { frame: 0, value: rightArm.pivot.rotation.z },
-      { frame: peakFrame, value: tiltZ },
-      { frame: totalFrames, value: 0 },
+      { frame: peakFrame, value: armRestZ[1] + tiltZ },
+      { frame: totalFrames, value: armRestZ[1] },
     ]);
     animZ.setEasingFunction(ease);
 

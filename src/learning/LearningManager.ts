@@ -1,5 +1,6 @@
-import { ALL_SPELLS, Spell, SpellQuestion } from "../data/spells";
+import { ALL_SPELLS, Spell, SpellQuestion, schoolOf } from "../data/spells";
 import { GameState } from "../core/GameState";
+import { appendSolvedButton } from "../debug/debugSolve";
 
 export interface LearningCallbacks {
   onSpellLearned: (spell: Spell) => void;
@@ -83,6 +84,7 @@ export class LearningManager {
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
           <div class="bonfire-spell-law">${spell.law}</div>
+          <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
           <div class="bonfire-spell-formula">${spell.formula}</div>
         `;
         item.addEventListener("click", () => this.renderStage(spell, "simple"));
@@ -192,6 +194,7 @@ export class LearningManager {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitAnswer();
     });
+    appendSolvedButton(panel, input, question.answer, submitAnswer);
 
     overlay.appendChild(panel);
     this.uiRoot.appendChild(overlay);

@@ -32,7 +32,8 @@ export interface PracticeTargetSpec {
 
 export interface GateSpec {
   id: string;
-  requiredTier: number;
+  /** Сколько тем нужно изучить суммарно (по любой школе), чтобы пробить барьер. */
+  requiredSpells: number;
 }
 
 export type BorderStyle = "bushes" | "fence" | "mountains";
@@ -96,6 +97,15 @@ const BORDER_STYLES: readonly BorderStyle[] = ["bushes", "fence", "mountains"];
 const PRACTICE_KINDS: readonly PracticeTargetKind[] = ["tree", "dummy", "nettle"];
 
 /**
+ * Уровень барьера: доля от ВСЕГО числа заклинаний, зависящая от сложности
+ * секции (tier 1-3). С ростом контента (добавление школ) пороги масштабируются
+ * сами — линейная треть на каждый тир.
+ */
+function gateRequiredSpells(tier: number, totalSpells: number): number {
+  return Math.max(1, Math.min(totalSpells, Math.ceil((totalSpells * tier) / 6)));
+}
+
+/**
  * Процедурная генерация коридора (п.5 ТЗ): каждый запуск с новым seed даёт
  * другое число и длину секций, другую расстановку ведьм и декора. Секции
  * стыкуются встык (endZ одной == startZ следующей) — разрывов в полу нет.
@@ -116,9 +126,12 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     const length = randRange(rng, 12, 18);
     const startZ = cursorZ;
     const endZ = startZ + length;
-    const gateAtStart: GateSpec | null = previousTier !== null ? { id: `gate-${i}`, requiredTier: previousTier } : null;
+    const gateAtStart: GateSpec | null =
+      previousTier !== null ? { id: `gate-${i}`, requiredSpells: gateRequiredSpells(previousTier, ALL_SPELLS.length) } : null;
 
-    const spellPool = ALL_SPELLS.filter((s) => s.tier <= tier);
+    // Пул тем секции: не сложнее тира секции И из открытых школ
+    // (Школа тайн не подсовывает ведьм, пока не выучены мосты).
+    const spellPool = ALL_SPELLS.filter((s) => s.tier <= tier && gameState.isSchoolUnlocked(s.school));
     const witchCount = randInt(rng, 1, tier === 1 ? 2 : 3);
     const bonfireSpot = { x: randRange(rng, -1.5, 1.5), z: startZ + 2.5 };
     const witches: WitchSpec[] = [];
@@ -169,7 +182,9 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   const approachEnd = approachStart + approachLength;
   const approachBorderStyle = pick(rng, BORDER_STYLES);
   const approachGate: GateSpec | null =
-    previousTier !== null ? { id: "gate-approach", requiredTier: previousTier } : null;
+    previousTier !== null
+      ? { id: "gate-approach", requiredSpells: gateRequiredSpells(previousTier, ALL_SPELLS.length) }
+      : null;
   sections.push({
     index: sections.length,
     startZ: approachStart,

@@ -1,4 +1,13 @@
-import { ALL_SPELLS, Spell, STARTER_SPELL_IDS } from "../data/spells";
+import {
+  ALL_SPELLS,
+  ALL_SCHOOLS,
+  Spell,
+  School,
+  STARTER_SPELL_IDS,
+  getSchoolById,
+  getSpellsBySchool,
+  isBridgeSpell,
+} from "../data/spells";
 
 export interface SpellProgress {
   learned: boolean;
@@ -8,8 +17,9 @@ export interface SpellProgress {
 export const MAX_MASTERY = 5;
 
 /**
- * Центральное состояние прокачки игрока (п.2-3 ТЗ). Пока живёт в памяти —
- * сохранение в localStorage добавится вместе с этапом 10.
+ * Центральное состояние прокачки игрока. Ветки (школы) независимы: у каждой
+ * свой граф внутри и свой прогресс; школа открывается правилом из data
+ * (по умолчанию всегда; Школа тайн — после N изученных мостов).
  */
 export class GameState {
   private progress = new Map<string, SpellProgress>();
@@ -66,9 +76,36 @@ export class GameState {
     }
   }
 
-  /** Пререквизиты изучены — тему можно открыть у костра. */
+  // ---------- Школы (ветки) ----------
+
+  /** Сколько мостов (комбо-заклинаний двух школ) игрок успел изучить. */
+  public getLearnedBridgeCount(): number {
+    return ALL_SPELLS.filter((s) => isBridgeSpell(s) && this.isLearned(s.id)).length;
+  }
+
+  /** Школа открыта? По умолчанию да; у школы с unlockRule — после N мостов. */
+  public isSchoolUnlocked(schoolId: string): boolean {
+    const school = getSchoolById(schoolId);
+    const required = school.unlockRule?.bridges ?? 0;
+    if (required <= 0) return true;
+    return this.getLearnedBridgeCount() >= required;
+  }
+
+  public getUnlockedSchools(): School[] {
+    return ALL_SCHOOLS.filter((s) => this.isSchoolUnlocked(s.id));
+  }
+
+  /** Прогресс ветки: изучено/всего по ОСНОВНОЙ школе (мосты в свою основную). */
+  public getSchoolProgress(schoolId: string): { learned: number; total: number } {
+    const spells = getSpellsBySchool(schoolId);
+    const learned = spells.filter((s) => this.isLearned(s.id)).length;
+    return { learned, total: spells.length };
+  }
+
+  /** Пререквизиты изучены и школа открыта — тему можно выучить у костра. */
   public isUnlockable(spell: Spell): boolean {
     if (this.isLearned(spell.id)) return false;
+    if (!this.isSchoolUnlocked(spell.school)) return false;
     return spell.prerequisites.every((id) => this.isLearned(id));
   }
 

@@ -20,11 +20,17 @@ export class WorldStreamer {
     this.chunks = world.sections.map((s) => new SectionChunk(scene, s));
   }
 
-  public update(playerZ: number): void {
-    let currentIndex = 0;
+  /** Индекс секции, которой принадлежит мировая z-координата. */
+  public sectionIndexOf(z: number): number {
+    let index = 0;
     for (let i = 0; i < this.chunks.length; i++) {
-      if (playerZ >= this.chunks[i].spec.startZ) currentIndex = i;
+      if (z >= this.chunks[i].spec.startZ) index = i;
     }
+    return index;
+  }
+
+  public update(playerZ: number): void {
+    const currentIndex = this.sectionIndexOf(playerZ);
 
     for (let i = 0; i < this.chunks.length; i++) {
       const shouldBeBuilt = Math.abs(i - currentIndex) <= 1;

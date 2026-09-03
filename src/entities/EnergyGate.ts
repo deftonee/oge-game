@@ -9,17 +9,17 @@ const TIER_GLOW: Record<number, string> = {
 
 /**
  * Энергетический барьер между секциями (по фидбэку): физически блокирует
- * проход (коллизия), пока не будет разрушен заклинанием нужного уровня —
- * см. GateManager. Требуемый тир растёт вместе с прогрессом по коридору.
+ * проход (коллизия), пока не будет разрушен заклинанием. Требуемое число
+ * изученных тем растёт вместе с прогрессом по коридору — см. GateManager.
  */
 export class EnergyGate {
   private readonly barrier: Mesh;
   private readonly mat: StandardMaterial;
   public opened = false;
 
-  constructor(scene: Scene, z: number, public readonly id: string, public readonly requiredTier: number) {
+  constructor(scene: Scene, z: number, public readonly id: string, public readonly requiredSpells: number) {
     this.mat = new StandardMaterial(`gateMat_${id}`, scene);
-    const color = TIER_GLOW[requiredTier] ?? TIER_GLOW[3];
+    const color = TIER_GLOW[Math.min(requiredSpells, 3)] ?? TIER_GLOW[3];
     this.mat.diffuseColor = Color3.FromHexString(color);
     this.mat.emissiveColor = Color3.FromHexString(color);
     this.mat.alpha = 0.38;

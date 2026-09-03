@@ -33,7 +33,7 @@ for (let seed = 1; seed <= 200; seed++) {
     for (const b of s.bonfires) {
       check(b.z > s.startZ && b.z < s.endZ, `seed ${seed} section ${i}: костёр ${b.id} вне границ секции по Z (${b.z})`);
     }
-    for (const g of [...s.grass, ...s.bushesLeft, ...s.bushesRight]) {
+    for (const g of [...s.grass, ...s.borderLeft, ...s.borderRight]) {
       check(g.z >= s.startZ - 0.01 && g.z <= s.endZ + 0.01, `seed ${seed} section ${i}: декор вне границ по Z (${g.z})`);
     }
   }

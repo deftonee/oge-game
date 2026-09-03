@@ -1,0 +1,93 @@
+{
+  "school": "fire",
+  "spells": [
+    {
+      "id": "spark",
+      "name": "Искра Пробуждения",
+      "law": "Температура и тепловое движение",
+      "formula": "t (°C) = T (K) − 273",
+      "color": "#ff9f4f",
+      "tier": 1,
+      "prerequisites": [],
+      "tutorial": {
+        "simple": { "id": "spark-t1", "text": "Переведи 300 К в градусы Цельсия.", "answer": 27, "tolerance": 0.5, "unit": "°C" },
+        "harder": { "id": "spark-t2", "text": "Температура тела 40 °C. Вырази её в кельвинах.", "answer": 313, "tolerance": 0.5, "unit": "К" }
+      },
+      "questions": [
+        { "id": "spark-a1", "text": "Переведи 320 К в °C.", "answer": 47, "tolerance": 0.5, "unit": "°C" },
+        { "id": "spark-d1", "text": "Температура 27 °C. Сколько это кельвинов?", "answer": 300, "tolerance": 0.5, "unit": "К" },
+        { "id": "spark-s1", "text": "Переведи 373 К (точка кипения воды) в °C.", "answer": 100, "tolerance": 0.5, "unit": "°C" }
+      ],
+      "banks": {
+        "attackWitch": ["spark-a1"],
+        "defendWitch": ["spark-d1"],
+        "staticTarget": ["spark-s1"]
+      }
+    },
+    {
+      "id": "flame",
+      "name": "Формула Пламени",
+      "law": "Количество теплоты",
+      "formula": "Q = c · m · Δt",
+      "color": "#ff6b3d",
+      "tier": 2,
+      "prerequisites": ["spark"],
+      "tutorial": {
+        "simple": { "id": "flame-t1", "text": "c = 4200 Дж/(кг·°C), m = 2 кг, Δt = 5 °C. Найди Q.", "answer": 42000, "tolerance": 100, "unit": "Дж" },
+        "harder": {
+          "id": "flame-t2",
+          "text": "Вода массой 500 г нагрелась с 20 до 40 °C (c = 4200). Найди Q в килоджоулях.",
+          "answer": 42,
+          "tolerance": 1,
+          "unit": "кДж"
+        }
+      },
+      "questions": [
+        { "id": "flame-a1", "text": "c = 4200, m = 3 кг, Δt = 10 °C. Найди Q.", "answer": 126000, "tolerance": 100, "unit": "Дж" },
+        { "id": "flame-d1", "text": "Q = 84000 Дж, m = 2 кг, c = 4200. Найди Δt.", "answer": 10, "tolerance": 0.1, "unit": "°C" },
+        { "id": "flame-s1", "text": "Вода массой 4 кг получила 168000 Дж. Найди Δt (c = 4200).", "answer": 10, "tolerance": 0.1, "unit": "°C" }
+      ],
+      "banks": {
+        "attackWitch": ["flame-a1"],
+        "defendWitch": ["flame-d1"],
+        "staticTarget": ["flame-s1"]
+      }
+    },
+    {
+      "id": "machine_heart",
+      "name": "Сердце Машины",
+      "law": "КПД теплового двигателя",
+      "formula": "η = A / Qн",
+      "color": "#ff8c4f",
+      "tier": 3,
+      "schools": ["fire", "earth"],
+      "prerequisites": ["flame"],
+      "tutorial": {
+        "simple": {
+          "id": "mh-t1",
+          "text": "Двигатель совершил полезную работу 20 кДж, получив 100 кДж теплоты. Найди КПД в процентах.",
+          "answer": 20,
+          "tolerance": 0.5,
+          "unit": "%"
+        },
+        "harder": {
+          "id": "mh-t2",
+          "text": "Полезная работа 36 кДж, КПД 30%. Сколько теплоты получил двигатель (в кДж)?",
+          "answer": 120,
+          "tolerance": 1,
+          "unit": "кДж"
+        }
+      },
+      "questions": [
+        { "id": "mh-a1", "text": "Полезная работа 45 кДж, получено 180 кДж теплоты. Найди КПД в процентах.", "answer": 25, "tolerance": 0.5, "unit": "%" },
+        { "id": "mh-d1", "text": "КПД 40%, полезная работа 80 кДж. Найди полученную теплоту в кДж.", "answer": 200, "tolerance": 1, "unit": "кДж" },
+        { "id": "mh-s1", "text": "Двигатель получил 150 кДж теплоты, КПД 20%. Найди полезную работу в кДж.", "answer": 30, "tolerance": 0.5, "unit": "кДж" }
+      ],
+      "banks": {
+        "attackWitch": ["mh-a1"],
+        "defendWitch": ["mh-d1"],
+        "staticTarget": ["mh-s1"]
+      }
+    }
+  ]
+}

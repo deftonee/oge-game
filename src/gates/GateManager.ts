@@ -1,4 +1,4 @@
-import { Spell, SpellQuestion } from "../data/spells";
+import { Spell, SpellQuestion, hasQuestionRole, questionsFor, schoolOf } from "../data/spells";
 import { GameState } from "../core/GameState";
 import { EnergyGate } from "../entities/EnergyGate";
 
@@ -7,10 +7,11 @@ export interface GateCallbacks {
 }
 
 /**
- * Энергетический барьер между секциями (по фидбэку): нужно заклинание не
- * ниже требуемого тира, чтобы пробить. Выбрал заклинание → решил задачу.
- * Неверный ответ не наказывает — барьер просто не поддался, пробуй снова
- * (это проверка знаний, а не бой).
+ * Энергетический барьер между секциями (по фидбэку): нужно заклинание, чтобы
+ * пробить. Уровень барьера — требуемое СУММАРНОЕ число изученных тем: ветки
+ * независимы, глубина одной школы не форсируется. Барьер — статическая цель,
+ * вопросы берутся из банка staticTarget. Неверный ответ не наказывает —
+ * барьер просто не поддался, пробуй снова (это проверка знаний, а не бой).
  */
 export class GateManager {
   private overlay: HTMLElement | null = null;
@@ -33,12 +34,14 @@ export class GateManager {
   }
 
   private eligibleSpells(gate: EnergyGate): Spell[] {
-    return this.gameState.getLearnedSpells().filter((s) => s.tier >= gate.requiredTier);
+    // Барьер — статическая цель: применимы темы с банком тренировки.
+    return this.gameState.getLearnedSpells().filter((s) => hasQuestionRole(s, "staticTarget"));
   }
 
   private pickQuestion(spell: Spell): SpellQuestion {
-    const pool = spell.questions.filter((q) => !this.askedIds.has(q.id));
-    const source = pool.length > 0 ? pool : spell.questions;
+    const bank = questionsFor(spell, "staticTarget");
+    const pool = bank.filter((q) => !this.askedIds.has(q.id));
+    const source = pool.length > 0 ? pool : bank;
     const question = source[Math.floor(Math.random() * source.length)];
     this.askedIds.add(question.id);
     return question;
@@ -59,7 +62,7 @@ export class GateManager {
 
     const header = document.createElement("div");
     header.className = "bonfire-header";
-    header.innerHTML = `<div class="bonfire-title gate-title">⚡ Энергетический барьер · уровень ${gate.requiredTier}</div>`;
+    header.innerHTML = `<div class="bonfire-title gate-title">⚡ Энергетический барьер · ${gate.requiredSpells} изученных тем</div>`;
     const closeBtn = document.createElement("button");
     closeBtn.className = "graph-close";
     closeBtn.textContent = "✕";
@@ -70,7 +73,7 @@ export class GateManager {
     if (options.length === 0) {
       const empty = document.createElement("div");
       empty.className = "bonfire-empty";
-      empty.textContent = `Нужно заклинание не ниже уровня ${gate.requiredTier} — у тебя пока нет подходящего. Вернись к костру.`;
+      empty.textContent = `Нужно изучить хотя бы ${gate.requiredSpells} тем — пока нечего применить. Вернись к костру.`;
       panel.appendChild(empty);
     } else {
       const intro = document.createElement("div");
@@ -87,6 +90,7 @@ export class GateManager {
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
           <div class="bonfire-spell-law">${spell.law}</div>
+          <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
           <div class="bonfire-spell-formula">${spell.formula}</div>
         `;
         item.addEventListener("click", () => this.renderQuestion(gate, spell));

@@ -1,6 +1,7 @@
 import { Witch } from "../entities/Witch";
-import { Spell, SpellQuestion } from "../data/spells";
+import { Spell, SpellQuestion, QuestionRole, hasQuestionRole, questionsFor, schoolOf } from "../data/spells";
 import { GameState } from "../core/GameState";
+import { appendSolvedButton } from "../debug/debugSolve";
 
 export interface CombatCallbacks {
   onDuelWon: (witch: Witch) => void;
@@ -9,7 +10,7 @@ export interface CombatCallbacks {
   onPlayerDamaged: (amount: number) => void;
 }
 
-const ROUNDS_TO_WIN = 3; // столько верных атак нужно игроку, чтобы выиграть дуэль
+export const DEFAULT_ROUNDS_TO_WIN = 3; // сколько верных атак нужно игроку для победы (по умолчанию)
 const ROUNDS_TO_LOSE = 3; // столько ударов ведьмы игрок может пропустить, прежде чем проиграть
 const DAMAGE_PER_HIT = 15; // урон по общему HP игрока (HUD) за каждую пропущенную атаку
 
@@ -29,6 +30,7 @@ export class CombatManager {
   private activeWitch: Witch | null = null;
   private witchScore = 0; // попадания ведьмы по игроку
   private playerScore = 0; // попадания игрока по ведьме
+  private roundsToWin = DEFAULT_ROUNDS_TO_WIN; // настраивается на старте встречи
 
   private askedDefenseIds = new Set<string>();
   private askedAttackIds = new Map<string, Set<string>>(); // spellId -> уже заданные вопросы в этой дуэли
@@ -41,9 +43,10 @@ export class CombatManager {
     return this.overlay !== null;
   }
 
-  public startEncounter(witch: Witch): void {
+  public startEncounter(witch: Witch, roundsToWin: number = DEFAULT_ROUNDS_TO_WIN): void {
     if (this.isActive) return;
     this.activeWitch = witch;
+    this.roundsToWin = roundsToWin;
     this.witchScore = 0;
     this.playerScore = 0;
     this.askedDefenseIds.clear();
@@ -51,9 +54,13 @@ export class CombatManager {
     this.renderWitchAttack();
   }
 
-  private pickQuestion(spell: Spell, askedSet: Set<string>): SpellQuestion {
-    const pool = spell.questions.filter((q) => !askedSet.has(q.id));
-    const source = pool.length > 0 ? pool : spell.questions;
+  private pickQuestion(spell: Spell, role: QuestionRole, askedSet: Set<string>): SpellQuestion {
+    const bank = questionsFor(spell, role);
+    if (bank.length === 0) {
+      throw new Error(`[combat] «${spell.id}» не имеет вопросов для роли ${role}`);
+    }
+    const pool = bank.filter((q) => !askedSet.has(q.id));
+    const source = pool.length > 0 ? pool : bank;
     const question = source[Math.floor(Math.random() * source.length)];
     askedSet.add(question.id);
     return question;
@@ -72,7 +79,8 @@ export class CombatManager {
 
   private renderWitchAttack(): void {
     const witch = this.activeWitch!;
-    const question = this.pickQuestion(witch.spell, this.askedDefenseIds);
+    // Ведьма бьёт своей темой — игрок отражает её же законом (роль "защита").
+    const question = this.pickQuestion(witch.spell, "defendWitch", this.askedDefenseIds);
 
     const { panel, feedback, input, submit } = this.renderQuestionShell({
       badge: "Атака ведьмы",
@@ -118,6 +126,7 @@ export class CombatManager {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitAnswer();
     });
+    appendSolvedButton(panel, input, question.answer, submitAnswer);
     input.focus();
   }
 
@@ -125,7 +134,11 @@ export class CombatManager {
 
   private renderPlayerPickSpell(): void {
     const witch = this.activeWitch!;
-    const options = this.gameState.getLearnedSpells(witch.spell.id);
+    // Атаковать можно только темами, у которых есть боевой банк (атакующая роль);
+    // утилитарные/защитные заклинания в атаке неприменимы.
+    const options = this.gameState
+      .getLearnedSpells(witch.spell.id)
+      .filter((s) => hasQuestionRole(s, "attackWitch"));
 
     this.teardown();
 
@@ -140,7 +153,7 @@ export class CombatManager {
     if (options.length === 0) {
       const empty = document.createElement("div");
       empty.className = "combat-question";
-      empty.textContent = `«${witch.spell.name}» на неё саму не действует, а других тем ты пока не знаешь. Отступи и выучи что-то ещё у костра.`;
+      empty.textContent = `«${witch.spell.name}» на неё саму не действует, а боевых тем ты пока не знаешь. Отступи, выучи что-то ещё у костра и вернись.`;
       panel.appendChild(empty);
       this.appendRetreat(panel);
     } else {
@@ -158,6 +171,7 @@ export class CombatManager {
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
           <div class="bonfire-spell-law">${spell.law}</div>
+          <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
           <div class="bonfire-spell-formula">${spell.formula}</div>
         `;
         item.addEventListener("click", () => this.renderPlayerAttack(spell));
@@ -175,7 +189,7 @@ export class CombatManager {
   // ---------- Фаза 2б: игрок атакует выбранным заклинанием ----------
 
   private renderPlayerAttack(spell: Spell): void {
-    const question = this.pickQuestion(spell, this.askedSetFor(spell.id));
+    const question = this.pickQuestion(spell, "attackWitch", this.askedSetFor(spell.id));
 
     const { panel, feedback, input, submit } = this.renderQuestionShell({
       badge: "Твоя атака",
@@ -204,7 +218,7 @@ export class CombatManager {
         feedback.className = "combat-feedback ok";
         this.gameState.addMastery(spell.id, 1);
 
-        if (this.playerScore >= ROUNDS_TO_WIN) {
+        if (this.playerScore >= this.roundsToWin) {
           setTimeout(() => this.endDuel(true), 700);
         } else {
           setTimeout(() => this.renderWitchAttack(), 700);
@@ -221,6 +235,7 @@ export class CombatManager {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitAnswer();
     });
+    appendSolvedButton(panel, input, question.answer, submitAnswer);
     input.focus();
   }
 
@@ -309,7 +324,7 @@ export class CombatManager {
     const row = document.createElement("div");
     row.className = "combat-score-row";
     row.innerHTML = `
-      <span class="combat-score player">Ты: ${this.dots(this.playerScore, ROUNDS_TO_WIN)}</span>
+      <span class="combat-score player">Ты: ${this.dots(this.playerScore, this.roundsToWin)}</span>
       <span class="combat-score witch">Ведьма: ${this.dots(this.witchScore, ROUNDS_TO_LOSE)}</span>
     `;
     return row;

@@ -1,5 +1,6 @@
-import { Spell, SpellQuestion } from "../data/spells";
+import { Spell, SpellQuestion, hasQuestionRole, questionsFor, schoolOf } from "../data/spells";
 import { GameState } from "../core/GameState";
+import { appendSolvedButton } from "../debug/debugSolve";
 
 /**
  * Тренировка у статического объекта (дерево/чучело/крапива, по фидбэку):
@@ -32,8 +33,10 @@ export class PracticeManager {
       asked = new Set();
       this.askedIds.set(spell.id, asked);
     }
-    const pool = spell.questions.filter((q) => !asked!.has(q.id));
-    const source = pool.length > 0 ? pool : spell.questions;
+    // Тренировка у статической цели — только банк роли staticTarget.
+    const bank = questionsFor(spell, "staticTarget");
+    const pool = bank.filter((q) => !asked!.has(q.id));
+    const source = pool.length > 0 ? pool : bank;
     const question = source[Math.floor(Math.random() * source.length)];
     asked.add(question.id);
     return question;
@@ -41,7 +44,8 @@ export class PracticeManager {
 
   private renderMenu(): void {
     this.teardown();
-    const options = this.gameState.getLearnedSpells();
+    // Только темы с банком тренировки (staticTarget) можно отрабатывать у цели.
+    const options = this.gameState.getLearnedSpells().filter((s) => hasQuestionRole(s, "staticTarget"));
 
     const overlay = document.createElement("div");
     overlay.className = "bonfire-overlay";
@@ -82,6 +86,7 @@ export class PracticeManager {
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
           <div class="bonfire-spell-law">${spell.law}</div>
+          <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
           <div class="bonfire-spell-formula">${spell.formula}</div>
         `;
         item.addEventListener("click", () => this.renderQuestion(spell));
@@ -168,6 +173,7 @@ export class PracticeManager {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitAnswer();
     });
+    appendSolvedButton(panel, input, question.answer, submitAnswer);
 
     overlay.appendChild(panel);
     this.uiRoot.appendChild(overlay);

@@ -107,14 +107,14 @@ export class Witch {
   private applyFriendlyVisual(): void {
     this.figure.hat.setEnabled(false); // сняла шляпу
     this.friendlyMarker.setEnabled(true);
-    this.figure.robeMat.diffuseColor = Color3.Lerp(this.figure.robeMat.diffuseColor, Color3.White(), 0.55);
+    this.figure.robeMat.albedoColor = Color3.Lerp(this.figure.robeMat.albedoColor, Color3.White(), 0.55);
     this.figure.setExpression("happy");
   }
 
   private applyHostileVisual(): void {
     this.figure.hat.setEnabled(true);
     this.friendlyMarker.setEnabled(false);
-    this.figure.robeMat.diffuseColor = Color3.FromHexString(this.spell.color);
+    this.figure.robeMat.albedoColor = Color3.FromHexString(this.spell.color);
     this.figure.setExpression("grumpy");
   }
 }
