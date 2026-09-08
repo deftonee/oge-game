@@ -1,0 +1,96 @@
+import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Quaternion } from "@babylonjs/core";
+import { WorldSpec, localToWorld } from "./WorldGenerator";
+
+/**
+ * Туман между последней отрисованной секцией мира и башней (доработка):
+ * на конце каждой секции стоит полупрозрачная стена тумана. Активна ровно
+ * одна — на frontier (самой дальней построенной секции, см. WorldStreamer):
+ * за ней уже ничего не построено, там туман скрывает остаток пути до башни.
+ * При продвижении игрока стена плавно тает и появляется следующая, дальше
+ * по трассе — туман «отступает» без скачков.
+ */
+export class FogManager {
+  private static readonly FOG_COLOR = "#0d1120";
+  private static readonly FOG_ALPHA = 0.85;
+  private static readonly FOG_HEIGHT = 18; // выше башни (12 + крыша 3)
+  private static readonly PLANE_GAP = 2.6; // две плоскости для ощущения объёма
+  private static readonly FADE_SPEED = 2.5; // 1/с
+
+  private readonly mat: StandardMaterial;
+  private readonly entries: { planes: Mesh[]; visibility: number }[] = [];
+  private lastFrontier = -2;
+  private settled = true;
+
+  constructor(scene: Scene, world: WorldSpec) {
+    this.mat = new StandardMaterial("fogMat", scene);
+    this.mat.diffuseColor = Color3.FromHexString(FogManager.FOG_COLOR);
+    this.mat.emissiveColor = Color3.FromHexString(FogManager.FOG_COLOR);
+    this.mat.specularColor = Color3.Black();
+    this.mat.alpha = FogManager.FOG_ALPHA;
+    this.mat.backFaceCulling = false;
+    this.mat.disableLighting = true;
+
+    for (const section of world.sections) {
+      const planes: Mesh[] = [];
+      // Обычные секции: туман чуть за кромкой пола, в неотрисованной зоне.
+      // Подход к башне (tier 0): башня стоит на length+2 — стены тумана
+      // ставятся ПЕРЕД ней на самом полу подхода, чтобы скрыть её до финала.
+      const baseOffset = section.tier === 0 ? -2.5 : 3;
+      for (let p = 0; p < 2; p++) {
+        const pos = localToWorld(section, 0, section.length + baseOffset + p * FogManager.PLANE_GAP);
+        const plane = MeshBuilder.CreatePlane(
+          `fog_${section.index}_${p}`,
+          { width: section.width + 8, height: FogManager.FOG_HEIGHT },
+          scene
+        );
+        plane.material = this.mat;
+        plane.rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), section.yaw);
+        plane.position.set(pos.x, FogManager.FOG_HEIGHT / 2, pos.z);
+        plane.visibility = 0;
+        plane.isVisible = false;
+        planes.push(plane);
+      }
+      this.entries.push({ planes, visibility: 0 });
+    }
+  }
+
+  /**
+   * Вызывается каждый кадр. frontier — индекс самой дальней построенной
+   * секции (WorldStreamer.frontierIndex()); её стена тумана разгорается,
+   * остальные плавно гаснут.
+   */
+  public update(frontierIndex: number, deltaSeconds: number): void {
+    if (frontierIndex === this.lastFrontier && this.settled) return;
+    this.lastFrontier = frontierIndex;
+
+    const k = Math.min(1, deltaSeconds * FogManager.FADE_SPEED);
+    let settled = true;
+    for (let i = 0; i < this.entries.length; i++) {
+      const target = i === frontierIndex ? 1 : 0;
+      const e = this.entries[i];
+      const v = target > e.visibility ? Math.min(target, e.visibility + k) : Math.max(target, e.visibility - k);
+      if (Math.abs(v - target) > 0.005) settled = false;
+      e.visibility = v;
+      const visible = v > 0.01;
+      for (const plane of e.planes) {
+        plane.visibility = visible ? v : 0;
+        if (plane.isVisible !== visible) plane.isVisible = visible;
+      }
+    }
+    this.settled = settled;
+  }
+
+  /** Видима ли стена тумана секции (для тестов и отладки). */
+  public isWallActive(index: number): boolean {
+    const e = this.entries[index];
+    return !!e && e.visibility > 0.5;
+  }
+
+  public dispose(): void {
+    for (const e of this.entries) {
+      for (const plane of e.planes) plane.dispose();
+    }
+    this.entries.length = 0;
+    this.mat.dispose();
+  }
+}

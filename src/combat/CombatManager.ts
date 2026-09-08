@@ -1,5 +1,14 @@
 import { Witch } from "../entities/Witch";
-import { Spell, SpellQuestion, QuestionRole, hasQuestionRole, questionsFor, schoolOf } from "../data/spells";
+import {
+  Spell,
+  SpellQuestion,
+  QuestionRole,
+  hasQuestionRole,
+  questionsFor,
+  schoolOf,
+  ALL_SCHOOLS,
+  getSchoolById,
+} from "../data/spells";
 import { GameState } from "../core/GameState";
 import { appendSolvedButton } from "../debug/debugSolve";
 
@@ -159,25 +168,73 @@ export class CombatManager {
     } else {
       const intro = document.createElement("div");
       intro.className = "combat-question";
-      intro.textContent = "Выбери заклинание для атаки:";
+      intro.textContent = "Выбери ветку, затем заклинание для атаки:";
       panel.appendChild(intro);
 
+      // Группировка по школам в порядке ALL_SCHOOLS — на тач-экранах длинный
+      // плоский список неудобен, поэтому сначала чипы веток, затем спеллы выбранной.
+      const groups = new Map<string, Spell[]>();
+      for (const spell of options) {
+        let bucket = groups.get(spell.school);
+        if (!bucket) {
+          bucket = [];
+          groups.set(spell.school, bucket);
+        }
+        bucket.push(spell);
+      }
+      const branchIds = ALL_SCHOOLS.map((s) => s.id).filter((id) => groups.has(id));
+
+      const bar = document.createElement("div");
+      bar.className = "combat-branch-bar";
       const list = document.createElement("div");
       list.className = "bonfire-list";
-      for (const spell of options) {
-        const item = document.createElement("button");
-        item.className = "bonfire-spell-option";
-        item.style.borderColor = spell.color;
-        item.innerHTML = `
-          <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
-          <div class="bonfire-spell-law">${spell.law}</div>
-          <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
-          <div class="bonfire-spell-formula">${spell.formula}</div>
-        `;
-        item.addEventListener("click", () => this.renderPlayerAttack(spell));
-        list.appendChild(item);
+
+      let currentBranch = branchIds[0];
+
+      const setActive = (): void => {
+        for (const chip of Array.from(bar.children)) {
+          chip.classList.toggle("active", (chip as HTMLElement).dataset.branch === currentBranch);
+        }
+      };
+
+      const renderList = (): void => {
+        list.innerHTML = "";
+        for (const spell of groups.get(currentBranch)!) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "bonfire-spell-option";
+          item.style.borderColor = spell.color;
+          item.innerHTML = `
+            <div class="bonfire-spell-name" style="color:${spell.color}">${spell.name}</div>
+            <div class="bonfire-spell-law">${spell.law}</div>
+            <div class="bonfire-spell-school">${schoolOf(spell).icon} ${schoolOf(spell).pathName}</div>
+            <div class="bonfire-spell-formula">${spell.formula}</div>
+          `;
+          item.addEventListener("click", () => this.renderPlayerAttack(spell));
+          list.appendChild(item);
+        }
+      };
+
+      for (const id of branchIds) {
+        const school = getSchoolById(id);
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "combat-branch-chip";
+        chip.dataset.branch = id;
+        chip.style.borderColor = school.color;
+        chip.innerHTML = `<span class="combat-branch-icon">${school.icon}</span><span>${school.name}</span>`;
+        chip.addEventListener("click", () => {
+          currentBranch = id;
+          setActive();
+          renderList();
+        });
+        bar.appendChild(chip);
       }
+
+      panel.appendChild(bar);
       panel.appendChild(list);
+      setActive();
+      renderList();
       this.appendRetreat(panel);
     }
 
@@ -284,6 +341,7 @@ export class CombatManager {
     const input = document.createElement("input");
     input.type = "number";
     input.step = "any";
+    input.inputMode = "decimal"; // числовая клавиатура с запятой на мобильных
     input.className = "combat-answer-input";
     input.placeholder = "Ответ";
     answerRow.appendChild(input);

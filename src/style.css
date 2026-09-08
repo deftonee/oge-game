@@ -802,3 +802,191 @@ body {
     transform: translateX(8px);
   }
 }
+
+/* ---------- Мобильное управление ---------- */
+
+.mobile-controls {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10; /* ниже оверлеев (15/20), выше канваса */
+}
+
+.joy-zone {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 55vw;
+  height: 72vh;
+  touch-action: none;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.joy-base,
+.joy-knob {
+  position: fixed;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  will-change: transform;
+}
+
+.joy-base {
+  width: 112px;
+  height: 112px;
+  margin: -56px 0 0 -56px; /* центрирование по точке касания */
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(2px);
+}
+
+.joy-knob {
+  width: 52px;
+  height: 52px;
+  margin: -26px 0 0 -26px;
+  background: rgba(255, 255, 255, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.mobile-buttons {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.mobile-btn {
+  pointer-events: auto;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  background: rgba(20, 24, 40, 0.55);
+  color: var(--chalk);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-touch-callout: none;
+  backdrop-filter: blur(2px);
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+
+.mobile-btn:active {
+  transform: scale(0.9);
+  filter: brightness(1.25);
+}
+
+.mobile-btn.interact {
+  width: 76px;
+  height: 76px;
+  font-size: 30px;
+  background: rgba(79, 214, 200, 0.16);
+  border-color: var(--spell);
+}
+
+.mobile-btn.graph {
+  width: 48px;
+  height: 48px;
+  font-size: 19px;
+}
+
+/* Десктоп-подсказку (WASD…) на тач-устройствах прячем */
+.is-mobile .hud-hint {
+  display: none;
+}
+
+/* ---------- Выбор ветки в бою ---------- */
+
+.combat-branch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.combat-branch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 2px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--chalk);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+
+.combat-branch-chip:active {
+  transform: scale(0.95);
+}
+
+.combat-branch-chip.active {
+  background: rgba(255, 255, 255, 0.14);
+  filter: brightness(1.25);
+}
+
+.combat-branch-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* ---------- Эмуляция мобильного устройства (dev: ?mobile=1) ---------- */
+
+body.emulate-mobile {
+  overflow: hidden;
+  background: #000;
+}
+
+/* Узкое портретное «окно» 9:16 по центру экрана (вместо канваса во весь монитор) */
+body.emulate-mobile #renderCanvas {
+  position: fixed;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  width: min(100vw, calc(100vh * 9 / 16));
+  height: 100vh;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+}
+
+/* #ui-root сужаем и вешаем transform: fixed-оверлеи/подсказки/панели
+   позиционируются внутри рамки телефона, а не на весь монитор */
+body.emulate-mobile #ui-root {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: min(100vw, calc(100vh * 9 / 16));
+}
+
+/* Мобильные контролы — БЕЗ transform (иначе съедет база стика: она позиционируется
+   fixed по clientX/Y от вьюпорта; transform на предке ломает fixed-координаты) */
+body.emulate-mobile .mobile-controls {
+  left: 50%;
+  right: auto;
+  width: min(100vw, calc(100vh * 9 / 16));
+  margin-left: calc(min(100vw, 100vh * 9 / 16) / -2);
+}
+
+/* Зона стика — 55% рамки телефона вместо 55vw всего монитора */
+body.emulate-mobile .joy-zone {
+  width: 55%;
+}
+
+/* Панели оверлеев не шире рамки (width: min(520px, 90vw) считает от монитора) */
+body.emulate-mobile [class$="-panel"] {
+  max-width: calc(min(100vw, 100vh * 9 / 16) - 48px);
+}

@@ -11,6 +11,7 @@
     "test:world-streamer": "esbuild scripts/test-world-streamer.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-world-streamer.cjs && node .tmp/test-world-streamer.cjs",
     "test:witch-figure": "esbuild scripts/test-witch-figure.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-witch-figure.cjs && node .tmp/test-witch-figure.cjs",
     "test:spells": "esbuild scripts/test-spells.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-spells.cjs && node .tmp/test-spells.cjs",
+    "test:mobile": "esbuild scripts/test-mobile-controls.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-mobile-controls.cjs && node .tmp/test-mobile-controls.cjs",
     "test:world": "npm run test:world-gen && npm run test:world-streamer"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.23.0",
+    "happy-dom": "^20.14.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.2"
   }

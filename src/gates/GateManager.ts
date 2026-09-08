@@ -1,6 +1,7 @@
-import { Spell, SpellQuestion, hasQuestionRole, questionsFor, schoolOf } from "../data/spells";
+import { Spell, SpellQuestion, hasQuestionRole, questionsFor, schoolOf, getSchoolById } from "../data/spells";
 import { GameState } from "../core/GameState";
 import { EnergyGate } from "../entities/EnergyGate";
+import { appendSolvedButton } from "../debug/debugSolve";
 
 export interface GateCallbacks {
   onGateOpened: (gate: EnergyGate) => void;
@@ -35,7 +36,15 @@ export class GateManager {
 
   private eligibleSpells(gate: EnergyGate): Spell[] {
     // Барьер — статическая цель: применимы темы с банком тренировки.
-    return this.gameState.getLearnedSpells().filter((s) => hasQuestionRole(s, "staticTarget"));
+    const learned = this.gameState.getLearnedSpells().filter((s) => hasQuestionRole(s, "staticTarget"));
+    // Ворота ведут в конкретную ветку прокачки (школу): когда игрок знает
+    // хоть одно её заклинание, барьер принимает только их (отработка ветки).
+    // Иначе — любые выученные темы, чтобы игрок не оказался в тупике.
+    if (gate.schoolId) {
+      const themed = learned.filter((s) => s.schools.includes(gate.schoolId!));
+      if (themed.length > 0) return themed;
+    }
+    return learned;
   }
 
   private pickQuestion(spell: Spell): SpellQuestion {
@@ -62,7 +71,8 @@ export class GateManager {
 
     const header = document.createElement("div");
     header.className = "bonfire-header";
-    header.innerHTML = `<div class="bonfire-title gate-title">⚡ Энергетический барьер · ${gate.requiredSpells} изученных тем</div>`;
+    const schoolLabel = gate.schoolId ? ` · ветка «${getSchoolById(gate.schoolId).name}»` : "";
+    header.innerHTML = `<div class="bonfire-title gate-title">⚡ Энергетический барьер${schoolLabel} · ${gate.requiredSpells} изученных тем</div>`;
     const closeBtn = document.createElement("button");
     closeBtn.className = "graph-close";
     closeBtn.textContent = "✕";
@@ -186,6 +196,7 @@ export class GateManager {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitAnswer();
     });
+    appendSolvedButton(panel, input, question.answer, submitAnswer);
 
     overlay.appendChild(panel);
     this.uiRoot.appendChild(overlay);

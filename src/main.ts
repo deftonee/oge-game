@@ -18,15 +18,30 @@ import { SpellGraphScreen } from "./ui/SpellGraphScreen";
 import { generateWorld } from "./world/WorldGenerator";
 import { WorldStreamer } from "./world/WorldStreamer";
 import { buildTower } from "./world/Tower";
+import { FogManager } from "./world/FogManager";
 import { Bonfire } from "./entities/Bonfire";
 import { Witch } from "./entities/Witch";
 import { PracticeTarget } from "./entities/PracticeTarget";
 import { EnergyGate } from "./entities/EnergyGate";
+import { getSchoolById } from "./data/spells";
+import { MobileControls } from "./mobile/MobileControls";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const uiRoot = document.getElementById("ui-root") as HTMLElement;
 
 const engine = new Engine(canvas, true, { stencil: true }, true);
+
+// --- Эмуляция мобильного устройства на десктопе (dev-only, ?mobile=1) ---
+// Для быстрой разработки без телефона: открываем http://localhost:5173/?mobile=1 —
+// окно сжимается до портретных пропорций 9:16, мобильное управление включается
+// принудительно (стик и кнопки работают мышью). В проде ветка выкидывается.
+const emulateMobile = import.meta.env.DEV && new URLSearchParams(window.location.search).has("mobile");
+if (emulateMobile) {
+  document.body.classList.add("emulate-mobile");
+  // Канвас CSS-сжимается до 9:16 — следим за его размером и пересобираем буфер
+  new ResizeObserver(() => engine.resize()).observe(canvas);
+}
+
 const scene = new Scene(engine);
 scene.clearColor = new Color4(0.06, 0.07, 0.12, 1);
 scene.collisionsEnabled = true;
@@ -44,8 +59,10 @@ const gameState = new GameState();
 // --- Мир: сначала данные (сиды/позиции), затем потоковая сборка секций.
 // Башня строится один раз отдельно от системы стриминга — видна всегда. ---
 const world = generateWorld(gameState);
-buildTower(scene, world.towerZ);
+buildTower(scene, world.tower.x, world.tower.z);
 const streamer = new WorldStreamer(scene, world, gameState);
+// Туман на frontier отрисованных секций скрывает участок до башни.
+const fog = new FogManager(scene, world);
 
 // Ведьма, от которой только что отступили/проиграли дуэль — пока игрок стоит
 // рядом, бой с ней повторно не запускается. Храним именно id: при возврате
@@ -63,7 +80,7 @@ const GLOBAL_ENCOUNTER_COOLDOWN = 1.2; // секунд
 const ROUNDS_TO_WIN_BY_SECTION: Readonly<Record<number, number>> = { 0: 1 };
 
 function duelRoundsToWin(): number {
-  const sectionIndex = streamer.sectionIndexOf(player.position.z);
+  const sectionIndex = streamer.sectionAt(player.position.x, player.position.z);
   return ROUNDS_TO_WIN_BY_SECTION[sectionIndex] ?? DEFAULT_ROUNDS_TO_WIN;
 }
 
@@ -126,6 +143,23 @@ function anyMenuOpen(): boolean {
   return combat.isActive || spellGraph.isOpen || learning.isActive || practice.isActive || gates.isActive;
 }
 
+/** Общая логика клавиши E и мобильной кнопки «взаимодействие». */
+function handleInteract(): void {
+  if (combat.isActive || spellGraph.isOpen) return;
+  if (nearGate) {
+    if (gates.isActive) gates.close();
+    else gates.open(nearGate);
+  } else if (nearBonfire) {
+    if (learning.isActive) learning.close();
+    else learning.open();
+  } else if (nearFriendlyWitch) {
+    combat.startEncounter(nearFriendlyWitch, duelRoundsToWin());
+  } else if (nearPracticeTarget) {
+    if (practice.isActive) practice.close();
+    else practice.open();
+  }
+}
+
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
   if (key === "g" && !anyMenuOpen()) {
@@ -135,26 +169,40 @@ window.addEventListener("keydown", (e) => {
     if (learning.isActive) learning.close();
     if (practice.isActive) practice.close();
     if (gates.isActive) gates.close();
-  } else if (key === "e" && !combat.isActive && !spellGraph.isOpen) {
-    if (nearGate) {
-      if (gates.isActive) gates.close();
-      else gates.open(nearGate);
-    } else if (nearBonfire) {
-      if (learning.isActive) learning.close();
-      else learning.open();
-    } else if (nearFriendlyWitch) {
-      combat.startEncounter(nearFriendlyWitch, duelRoundsToWin());
-    } else if (nearPracticeTarget) {
-      if (practice.isActive) practice.close();
-      else practice.open();
-    }
+  } else if (key === "e") {
+    handleInteract();
   }
+});
+
+// Мобильное управление: стик слева, кнопки справа. Монтируется при первом касании,
+// на тач-устройствах — сразу; force (эмуляция с компа) включает без касаний.
+const mobile = new MobileControls({
+  onInteract: () => handleInteract(),
+  onSpellGraph: () => {
+    if (!anyMenuOpen() && !spellGraph.isOpen) spellGraph.toggle();
+  },
+  force: emulateMobile,
 });
 
 const ENCOUNTER_RADIUS = 2.0;
 const BONFIRE_RADIUS = 2.5;
 const PRACTICE_RADIUS = 2.2;
+// Радиус подхода к барьеру: считается от линии барьера (по всей его ширине),
+// а не от центра — иначе у широких ворот ветки взаимодействие было бы только в середине.
 const GATE_RADIUS = 2.5;
+
+/** Квадрат расстояния от точки до линии барьера (горизонтальный сегмент width). */
+function gateDistanceSq(gate: EnergyGate, x: number, z: number): number {
+  const rx = Math.cos(gate.yaw); // перпендикуляр к направлению барьера
+  const rz = -Math.sin(gate.yaw);
+  const px = x - gate.position.x;
+  const pz = z - gate.position.z;
+  const half = gate.width / 2;
+  const t = Math.max(-half, Math.min(half, px * rx + pz * rz));
+  const dx = px - rx * t;
+  const dz = pz - rz * t;
+  return dx * dx + dz * dz;
+}
 
 engine.runRenderLoop(() => {
   const dt = engine.getDeltaTime() / 1000;
@@ -163,6 +211,10 @@ engine.runRenderLoop(() => {
   const menuOpen = anyMenuOpen();
   player.inputLocked = menuOpen;
 
+  // Мобильное управление: прячем во время меню, вектор стика отдаём кадр в кадр
+  mobile.setVisible(!menuOpen);
+  player.setJoystick(mobile.getMoveVector());
+
   const forward = camera.getDirection(Vector3.Forward());
   const right = camera.getDirection(Vector3.Right());
   player.update(dt, forward, right);
@@ -170,8 +222,10 @@ engine.runRenderLoop(() => {
   // Камера мягко следует за игроком
   camera.target = Vector3.Lerp(camera.target, player.position, Math.min(1, dt * 8));
 
-  // Держим в памяти только текущую секцию и её соседей
-  streamer.update(player.position.z);
+  // Держим в памяти только текущую секцию и её соседей; туман прячет
+  // неотрисованный участок до башни
+  streamer.update(player.position.x, player.position.z);
+  fog.update(streamer.frontierIndex(), dt);
 
   if (!menuOpen) {
     const bonfires = streamer.getActiveBonfires();
@@ -179,14 +233,22 @@ engine.runRenderLoop(() => {
     const practiceTargets = streamer.getActivePracticeTargets();
     const activeGates = streamer.getActiveGates();
 
+    // Односторонние ворота развилки: как только игрок прошёл в ветку,
+    // за ним включается невидимый блок — назад пути нет.
+    for (const gate of activeGates) gate.updateOneWay(player.position.x, player.position.z);
+
     // Барьеры между секциями: физически блокируют проход (коллизия),
     // разрушаются по E выбором подходящего заклинания — см. GateManager.
+    // Подойти можно вдоль всей ширины барьера; при развилке из нескольких
+    // барьеров выбираем ближайший к игроку.
     nearGate = null;
+    let gateDistSq = GATE_RADIUS * GATE_RADIUS;
     for (const gate of activeGates) {
       if (gate.opened) continue;
-      if (Vector3.Distance(gate.position, player.position) <= GATE_RADIUS) {
+      const d = gateDistanceSq(gate, player.position.x, player.position.z);
+      if (d <= gateDistSq) {
         nearGate = gate;
-        break;
+        gateDistSq = d;
       }
     }
 
@@ -229,7 +291,8 @@ engine.runRenderLoop(() => {
           if (gameState.isLearned(witch.spell.id)) {
             combat.startEncounter(witch, duelRoundsToWin());
           } else {
-            lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: клавиша G)`;
+            const graphLabel = mobile.isActive ? "кнопка 📜" : "клавиша G";
+            lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: ${graphLabel})`;
           }
           break;
         }
@@ -250,13 +313,16 @@ engine.runRenderLoop(() => {
 
     hud.setInteractHint(
       nearGate
-        ? `Нажми E — барьер: нужно ${nearGate.requiredSpells} изученных тем`
+        ? (mobile.isActive ? "Кнопка ✋" : "Нажми E") +
+            " — барьер ветки «" +
+            (nearGate.schoolId ? getSchoolById(nearGate.schoolId).name : "—") +
+            `»: нужно ${nearGate.requiredSpells} изученных тем`
         : nearBonfire
-        ? "Нажми E — сесть у костра"
+        ? (mobile.isActive ? "Кнопка ✋" : "Нажми E") + " — сесть у костра"
         : nearFriendlyWitch
-        ? "Нажми E — спарринг с побеждённой ведьмой"
+        ? (mobile.isActive ? "Кнопка ✋" : "Нажми E") + " — спарринг с побеждённой ведьмой"
         : nearPracticeTarget
-        ? "Нажми E — потренироваться"
+        ? (mobile.isActive ? "Кнопка ✋" : "Нажми E") + " — потренироваться"
         : null
     );
   } else {

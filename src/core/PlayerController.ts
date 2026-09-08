@@ -26,6 +26,9 @@ export class PlayerController {
   /** Заблокировать движение (например, во время боя) */
   public inputLocked = false;
 
+  /** Вектор мобильного стика (нормированный, y=+1 вперёд). null — нет тач-управления. */
+  private joystickVec: { x: number; y: number } | null = null;
+
   constructor(scene: Scene, spawnPosition: Vector3) {
     this.scene = scene;
 
@@ -39,7 +42,11 @@ export class PlayerController {
 
     this.visual = this.buildBlockyCharacter();
     this.visual.parent = this.collider;
-    this.visual.position = new Vector3(0, -0.9, 0);
+    // Визуал центрируется на коллайдере: ноги модели (низ ног на y=0 в
+    // локальных координатах модели) стоят ровно на полу, когда коллайдер
+    // лежит на нём. Раньше визуал был опущен на -0.9 — персонаж наполовину
+    // утопал в пол.
+    this.visual.position = new Vector3(0, 0, 0);
 
     this.setupInput();
   }
@@ -96,6 +103,11 @@ export class PlayerController {
     });
   }
 
+  /** Задать вектор мобильного стика (нормированный, кадр-в-кадр). Нулевой вектор инертен. */
+  public setJoystick(v: { x: number; y: number } | null): void {
+    this.joystickVec = v;
+  }
+
   /**
    * Вызывается каждый кадр. cameraForward/cameraRight — мировые направления камеры
    * (например camera.getDirection(Vector3.Forward()/Right())), их спроецируем на XZ сами.
@@ -110,6 +122,9 @@ export class PlayerController {
 
     let moveDir = Vector3.Zero();
     if (!this.inputLocked) {
+      if (this.joystickVec) {
+        moveDir = moveDir.add(forward.scale(this.joystickVec.y)).add(right.scale(this.joystickVec.x));
+      }
       if (this.inputMap["w"] || this.inputMap["arrowup"]) moveDir = moveDir.add(forward);
       if (this.inputMap["s"] || this.inputMap["arrowdown"]) moveDir = moveDir.subtract(forward);
       if (this.inputMap["d"] || this.inputMap["arrowright"]) moveDir = moveDir.add(right);
