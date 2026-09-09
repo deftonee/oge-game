@@ -59,25 +59,28 @@ check(streamer.isBuilt(parent.index), "у развилки родитель не
 check(streamer.isChunkBuilt(branchA) && streamer.isChunkBuilt(branchB), "у развилки должны быть видны обе ветки");
 check(!streamer.isBuilt(join.index), "схождение J не должно строиться, пока игрок у ворот");
 
-// --- выбор ветки A: невыбранная B больше не прорисовывается ---
+// --- выбор ветки A: невыбранная B остаётся видна (зона развилки) ---
 gameState.openGate(branchA.forkGateId!);
 const ac = localToWorld(branchA, 0, branchA.length / 2);
 streamer.update(ac.x, ac.z);
 check(streamer.isChunkBuilt(branchA), "выбранная ветка не построена");
-check(!streamer.isChunkBuilt(branchB), "невыбранная ветка должна быть выгружена после выбора");
+check(streamer.isChunkBuilt(branchB), "невыбранная ветка B выгружена в зоне развилки");
 check(streamer.isChunkBuilt(join), "схождение J не построено после входа в ветку");
 
 // --- обо всей длины ветки B нет, A есть ---
 const acEnd = localToWorld(branchA, 0, branchA.length - 1);
 streamer.update(acEnd.x, acEnd.z);
 check(streamer.isChunkBuilt(branchA), "ветка A пропала на её протяжении");
-check(!streamer.isChunkBuilt(branchB), "ветка B появилась на протяжении A");
+check(streamer.isChunkBuilt(branchB), "ветка B пропала на протяжении A (зона развилки)");
 
 // --- дальше по стволу после J ---
 const jc = localToWorld(join, 0, join.length - 1);
 streamer.update(jc.x, jc.z);
 check(streamer.isChunkBuilt(join), "схождение J не построено");
-check(!streamer.isChunkBuilt(branchB), "невыбранная ветка B прорисовывается дальше по миру");
+check(
+  streamer.isChunkBuilt(branchB),
+  "невыбранная ветка B пропала в схождении J (она должна быть видна у выхода из развилки)"
+);
 
 // --- максимум одновременных сущностей в окне ±1 ---
 let maxEntities = 0;
@@ -120,7 +123,8 @@ check(fog.isWallActive(streamer.frontierIndex()), "туман не встал н
 //   2) ни один чанк не пересобирается после выгрузки (нет churn);
 //   3) frontier (край тумана) монотонно растёт, не откатывается;
 //   4) у закрытых ворот развилки видны ОБЕ ветки, схождение не построено;
-//      после входа в выбранную ветку невыбранная выгружается.
+//      невыбранная ветка остаётся видна, пока игрок в «зоне развилки»
+//      (родитель..схождение J), и выгружается после ухода за J.
 // ---------------------------------------------------------------------------
 
 function nearestSpecAt(world: WorldSpec, x: number, z: number): SectionSpec {
@@ -218,10 +222,11 @@ function walkForward(seed: number): { missing: number; drops: number; maxBuilds:
         gs.openGate(spec.gates[0].id);
       }
 
-      // 5) сразу после входа в ветку A невыбранная B выгружена, J построено
+      // 5) после входа в ветку A невыбранная B всё ещё видна (зона развилки),
+      //    J построено; B выгрузится только после ухода за J
       if (spec.forkBranch === "a" && k === 1) {
         const parent = w.sections.find((s) => s.index === spec.forkParentIndex)!;
-        check(!st.isChunkBuilt(branchOf(parent, "b")!), `seed ${seed}: невыбранная ветка B видна после входа в A`);
+        check(st.isChunkBuilt(branchOf(parent, "b")!), `seed ${seed}: невыбранная ветка B пропала после входа в A (зона развилки)`);
         check(st.isChunkBuilt(joinOf(parent)!), `seed ${seed}: схождение не построено после входа в A`);
       }
     }
@@ -249,6 +254,208 @@ for (const seed of walkSeeds) {
   check(maxBuilds <= 1, `seed ${seed}: чанк пересобирался ${maxBuilds} раза — churn при монотонной прогулке`);
 }
 console.log(`прогулок вперёд: ${walkSeeds.length} миров с >=2 развилками (сиды ${walkSeeds.join(", ")})`);
+
+// ---------------------------------------------------------------------------
+// Регрессия «мигание секции у закрытых ворот развилки» (отчёт игрока: стоял
+// перед воротами, покачивался вперёд-назад — следующая секция перестраивалась
+// каждый кадр). Причина: ось ветки развилки начинается у САМИХ ворот родителя,
+// поэтому по чистой близости sectionAt сажал игрока в ветку ДО прохода ворот
+// (ветка ближе, чем ось родителя), а update() с закрытыми воротами выгружал
+// обе ветки и строил схождение J. Покачивание туда-сюда = build/dispose цикл.
+//
+// Ожидание (после фикса): закрытая ветка НЕ участвует в выборе секции игрока —
+// section всё время родитель, после первичной сборки НИ ОДИН чанк не меняет
+// состояние, обе ветки видны, схождение не построено.
+function forkGateHoverRegression(seed: number): void {
+  const gs = new GameState();
+  const w = generateWorld(gs, seed);
+  const st = new WorldStreamer(scene, w, gs);
+
+  const parent = w.sections.find((s) => s.gates.length === 2)!;
+  const branchA = w.sections.find((s) => s.forkBranch === "a" && s.forkParentIndex === parent.index)!;
+  const branchB = w.sections.find((s) => s.forkBranch === "b" && s.forkParentIndex === parent.index)!;
+  const join = w.sections.find((s) => !s.forkBranch && s.index === parent.index + 2)!;
+
+  // «mouth» — на линии ворот у входа в ветку A (старый sectionAt считал здесь
+  // секцией ветку: дистанция до старта оси ветки < дистанции до конца родителя);
+  // «away» — на 6 м вглубь родителя от конца (честно родитель). Качаемся между ними.
+  const E = { x: parent.end.x, z: parent.end.z };
+  const mouth = { x: branchA.start.x, z: branchA.start.z };
+  const away = { x: E.x + (E.x - mouth.x), z: E.z + (E.z - mouth.z) };
+
+  st.update(away.x, away.z); // первичная сборка окна родителя
+  const state = new Map<SectionSpec, boolean>();
+  for (const s of w.sections) state.set(s, st.isChunkBuilt(s));
+
+  let transitions = 0;
+  for (let i = 0; i < 60; i++) {
+    const p = i % 2 === 0 ? mouth : away;
+    st.update(p.x, p.z);
+    const cur = st.sectionAt(p.x, p.z);
+    check(cur === parent.index, `seed ${seed}: у закрытых ворот section прыгнул на ${cur} вместо родителя ${parent.index}`);
+    for (const s of w.sections) {
+      const built = st.isChunkBuilt(s);
+      if (built !== state.get(s)) {
+        transitions++;
+        state.set(s, built);
+      }
+    }
+  }
+  check(transitions === 0, `seed ${seed}: покачивание у закрытых ворот перестроило чанки ${transitions} раз`);
+  check(
+    st.isChunkBuilt(branchA) && st.isChunkBuilt(branchB),
+    `seed ${seed}: у закрытых ворот выгрузилась ветка развилки`
+  );
+  check(!st.isChunkBuilt(join), `seed ${seed}: схождение J построено у закрытых ворот`);
+}
+
+// ---------------------------------------------------------------------------
+// Гистерезис переключения секции: мёртвая зона у стыка осей (секции сходятся
+// в одной точке). Игрок, зашедший в следующую секцию меньше чем на порог,
+// остаётся на текущей; реальный уход переключает, и обратно — только после
+// такого же реального отхода (Schmitt trigger, без дребезга).
+function hysteresisBandRegression(seed: number): void {
+  const gs = new GameState();
+  const w = generateWorld(gs, seed);
+  const st = new WorldStreamer(scene, w, gs);
+
+  const s0 = w.sections.find((s) => s.index === 0)!;
+  const s1 = w.sections.find((s) => s.index === 1)!;
+  const dirX = Math.sin(s1.yaw);
+  const dirZ = Math.cos(s1.yaw);
+  const at = (d: number): { x: number; z: number } => ({
+    x: s0.end.x + dirX * d,
+    z: s0.end.z + dirZ * d,
+  });
+
+  check(st.sectionAt(at(-4).x, at(-4).z) === 0, `seed ${seed}: старт не в секции 0`);
+  check(st.sectionAt(at(0.5).x, at(0.5).z) === 0, `seed ${seed}: переключение на 1 раньше гистерезиса (+0.5 м)`);
+  check(st.sectionAt(at(3).x, at(3).z) === 1, `seed ${seed}: нет переключения на 1 при явном уходе (+3 м)`);
+  check(st.sectionAt(at(1).x, at(1).z) === 1, `seed ${seed}: откат на 0 в мёртвой зоне (+1 м назад)`);
+  check(st.sectionAt(at(-4).x, at(-4).z) === 0, `seed ${seed}: нет возврата в 0 после реального отхода (-4 м)`);
+}
+
+// ---------------------------------------------------------------------------
+// Регрессия «дребезг после открытия одних ворот, до входа»: игрок открыл
+// ветку A, но НЕ вошёл — ходит вдоль стыка между открытой A и закрытой B.
+// Ось открытой ветки начинается у самых ворот: при старом коде (кандидат =
+// открытая ветка) у входа в A дистанция до оси ~0, у входа в B — секция
+// родитель, и ходьба туда-сюда перестраивала окно каждый кадр. Ожидание:
+// ветка становится секцией только после РЕАЛЬНОГО входа (проекция на её ось
+// > FORK_ENTRY_M), поэтому у стыка section всё время родитель и переходов нет.
+function forkGateHoverOpenRegression(seed: number): void {
+  const gs = new GameState();
+  const w = generateWorld(gs, seed);
+  const st = new WorldStreamer(scene, w, gs);
+
+  const parent = w.sections.find((s) => s.gates.length === 2)!;
+  const branchA = w.sections.find((s) => s.forkBranch === "a" && s.forkParentIndex === parent.index)!;
+  const branchB = w.sections.find((s) => s.forkBranch === "b" && s.forkParentIndex === parent.index)!;
+  const join = w.sections.find((s) => !s.forkBranch && s.index === parent.index + 2)!;
+
+  gs.openGate(branchA.forkGateId ?? "");
+  // «Стык ворот»: ось ветки A начинается в точке старта A; старт B — на той же
+  // линии ворот в 12 м в стороне. Качаемся между ними — оба входа не пройдены.
+  st.update(branchB.start.x, branchB.start.z); // первичная сборка окна родителя
+  const state = new Map<SectionSpec, boolean>();
+  for (const s of w.sections) state.set(s, st.isChunkBuilt(s));
+
+  let transitions = 0;
+  for (let i = 0; i < 60; i++) {
+    const p = i % 2 === 0 ? branchB.start : branchA.start;
+    st.update(p.x, p.z);
+    const cur = st.sectionAt(p.x, p.z);
+    check(cur === parent.index, `seed ${seed}: у открытой ветки (до входа) section прыгнул на ${cur} вместо родителя ${parent.index}`);
+    for (const s of w.sections) {
+      const built = st.isChunkBuilt(s);
+      if (built !== state.get(s)) {
+        transitions++;
+        state.set(s, built);
+      }
+    }
+  }
+  check(transitions === 0, `seed ${seed}: ходьба вдоль ворот (открытая+закрытая) перестроила чанки ${transitions} раз`);
+  check(
+    st.isChunkBuilt(branchA) && st.isChunkBuilt(branchB),
+    `seed ${seed}: у стыка ворот выгрузилась ветка развилки`
+  );
+  check(!st.isChunkBuilt(join), `seed ${seed}: схождение J построено у не зашедшего в ветку игрока`);
+}
+
+// ---------------------------------------------------------------------------
+// Регрессия «дребезг тумана при выходе из развилки и назад»: игрок прошёл
+// выбранную ветку A, качается на границе конец-ветки (section = ветка) и
+// схождение J (section = J). При старом коде окно [parent..J] ↔ [A..next]
+// перестраивало parent и следующую секцию, а туман (frontier = max построенный
+// индекс) откатывался вперёд-назад. Плюс «второй путь» (невыбранная B) не
+// строилась при current = J — у выхода из развилки пустота и туман вплотную.
+//
+// Ожидание: мягкая выгрузка (DISPOSE_MARGIN) держит parent/next при качании,
+// ветки видны всю «зону развилки» (parent..J) — после первичной сборки НИ
+// ОДИН чанк не меняет состояние, frontier не откатывается, туман не прыгает.
+function forkExitRegression(seed: number): void {
+  const gs = new GameState();
+  const w = generateWorld(gs, seed);
+  const st = new WorldStreamer(scene, w, gs);
+
+  const parent = w.sections.find((s) => s.gates.length === 2)!;
+  const branchA = w.sections.find((s) => s.forkBranch === "a" && s.forkParentIndex === parent.index)!;
+  const branchB = w.sections.find((s) => s.forkBranch === "b" && s.forkParentIndex === parent.index)!;
+  const join = w.sections.find((s) => !s.forkBranch && s.index === parent.index + 2)!;
+  const after = w.sections.find((s) => s.index === join.index + 1);
+
+  gs.openGate(branchA.forkGateId ?? "");
+
+  // Точка на конце ветки A (section = ветка) и точка в схождении J через
+  // ~6 м от его старта (section = J): «вышел из развилки и вернулся».
+  const endA = { x: branchA.end.x, z: branchA.end.z };
+  const jx = Math.sin(join.yaw);
+  const jz = Math.cos(join.yaw);
+  const inJoin = { x: join.start.x + jx * 6, z: join.start.z + jz * 6 };
+
+  st.update(inJoin.x, inJoin.z); // первичная сборка: current = J, строятся A/B/J/next
+  st.update(endA.x, endA.z); // обратно в ветку: current = ветка, достраивается parent
+  const state = new Map<SectionSpec, boolean>();
+  for (const s of w.sections) state.set(s, st.isChunkBuilt(s));
+  const frontierAtRest = st.frontierIndex();
+
+  let transitions = 0;
+  for (let i = 0; i < 60; i++) {
+    const p = i % 2 === 0 ? endA : inJoin;
+    st.update(p.x, p.z);
+    for (const s of w.sections) {
+      const built = st.isChunkBuilt(s);
+      if (built !== state.get(s)) {
+        transitions++;
+        state.set(s, built);
+      }
+    }
+    check(
+      st.frontierIndex() >= frontierAtRest,
+      `seed ${seed}: frontier откатился ниже ${frontierAtRest} при качании у выхода из развилки`
+    );
+  }
+  check(transitions === 0, `seed ${seed}: качание на выходе из ветки в J перестроило чанки ${transitions} раз`);
+  check(st.isChunkBuilt(branchB), `seed ${seed}: «второй путь» (ветка B) выгружен у выхода из развилки`);
+  check(st.isChunkBuilt(join), `seed ${seed}: схождение J выгружено при качании на выходе из ветки`);
+
+  // Ушёл за J — невыбранная ветка выгружается. Точка забирается ГЛУБЖЕ
+  // δ мёртвой зоны гистерезиса (2 м от конца J), иначе current остаётся J.
+  if (after) {
+    const c = localToWorld(after, 0, Math.min(5, after.length - 2));
+    st.update(c.x, c.z);
+    check(!st.isChunkBuilt(branchB), `seed ${seed}: невыбранная ветка B видна после ухода за схождение`);
+  }
+}
+
+const hoverSeeds = walkSeeds.slice(0, 6);
+for (const seed of hoverSeeds) {
+  forkGateHoverRegression(seed);
+  forkGateHoverOpenRegression(seed);
+  forkExitRegression(seed);
+  hysteresisBandRegression(seed);
+}
+console.log(`покачиваний у ворот: ${hoverSeeds.length} миров (сиды ${hoverSeeds.join(", ")})`);
 
 console.log(`Проверок: ${checks}, провалов: ${failures}`);
 if (failures > 0) {

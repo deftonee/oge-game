@@ -75,7 +75,13 @@ export class SectionChunk {
 
     // Выходные ворота на конце секции (развилки — два барьера рядом).
     for (const g of this.spec.gates) {
-      if (gameState.isGateOpen(g.id)) continue;
+      if (gameState.isGateOpen(g.id)) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[stream] #${this.spec.index} build SKIP gate=${g.id} (already open)`
+        );
+        continue;
+      }
       const pos = this.toWorld(g.x, this.spec.length - 0.3);
       const gate = new EnergyGate(this.scene, {
         id: g.id,
@@ -89,11 +95,25 @@ export class SectionChunk {
       });
       this.gates.push(gate);
       this.disposables.push(gate);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[stream] #${this.spec.index} build +gate id=${g.id} school=${g.schoolId ?? "-"} req=${g.requiredSpells} fork=${!!g.fork} pos=(${pos.x.toFixed(2)},${pos.z.toFixed(2)}) width=${g.width.toFixed(2)}`
+      );
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[stream] #${this.spec.index} BUILD tier=${this.spec.tier} "${this.spec.color}" yaw=${this.spec.yaw.toFixed(3)} start=(${this.spec.start.x.toFixed(2)},${this.spec.start.z.toFixed(2)}) end=(${this.spec.end.x.toFixed(2)},${this.spec.end.z.toFixed(2)}) width=${this.spec.width} length=${this.spec.length.toFixed(2)} gates=${this.spec.gates.length}`
+    );
   }
 
   public dispose(): void {
     if (!this.built) return;
+    // Логируем ДО разборки: после dispose сцена уже пуста и непонятно, что было.
+    const gateIds = this.gates.map((g) => g.id).join(",");
+    // eslint-disable-next-line no-console
+    console.log(
+      `[stream] #${this.spec.index} DISPOSE tier=${this.spec.tier} gates=[${gateIds || "-"}]`
+    );
     for (const d of this.disposables) d.dispose();
     this.disposables = [];
     this.witches = [];
@@ -196,38 +216,62 @@ export class SectionChunk {
 
     const curHalf = spec.width / 2;
     const prevHalf = spec.prevWidth / 2;
-    const maxHalf = Math.max(curHalf, prevHalf);
     const dYaw = this.normAngle(spec.yaw - spec.prevYaw);
 
-    // --- 1) пол-заплатка клина внешнего угла при изгибе ---
+    // --- 1) пол-заплатка клина внешнего угла при изгибе + 2) забор-заглушка ---
     if (spec.jointRadius > 0 && Math.abs(dYaw) > 0.02) {
-      const depth = maxHalf * Math.tan(Math.abs(dYaw)) + 0.8;
-      const yawBis = (spec.yaw + spec.prevYaw) / 2;
-      const dirBisX = Math.sin(yawBis);
-      const dirBisZ = Math.cos(yawBis);
-
-      const mat = new StandardMaterial(`jointMat_${spec.index}`, this.scene);
-      mat.diffuseColor = Color3.FromHexString(spec.prevColor);
-      mat.specularColor = Color3.Black();
-      const patch = MeshBuilder.CreateBox(
-        `joint_${spec.index}`,
-        { width: maxHalf * 2 * 1.12, height: 0.08, depth },
-        this.scene
-      );
-      patch.material = mat;
-      patch.rotation.y = yawBis;
-      patch.position.set(spec.start.x - dirBisX * (depth / 2), 0, spec.start.z - dirBisZ * (depth / 2));
-      patch.checkCollisions = true;
-      this.disposables.push(patch, mat);
-
-      // --- 2) забор-заглушка между краями стен на внешней стороне изгиба ---
       const side = dYaw > 0 ? 1 : -1;
       const perpPX = Math.cos(spec.prevYaw);
       const perpPZ = -Math.sin(spec.prevYaw);
       const perpCX = Math.cos(spec.yaw);
       const perpCZ = -Math.sin(spec.yaw);
+      // Углы стен на внешней стороне изгиба — единственные точки, которые
+      // заплатка ОБЯЗАНА накрыть (дальше начинаются сами стены секций).
       const kp = { x: spec.prevEnd.x + perpPX * (side * prevHalf), z: spec.prevEnd.z + perpPZ * (side * prevHalf) };
       const kc = { x: spec.start.x + perpCX * (side * curHalf), z: spec.start.z + perpCZ * (side * curHalf) };
+
+      // Заплатку строим как bounding box вершин {P=spec.start, kp, kc} в
+      // системе координат биссектрисы — это математически гарантирует
+      // полное накрытие клина. Старая формула (depth = maxHalf*tan(dYaw))
+      // била мимо: медианный недолёт до kp ~0.76 м, до 1.78 м на резких
+      // поворотах — отсюда щели в полу на внешней стороне почти каждого
+      // изгиба (изгибы — не редкость, они на каждом обычном стыке).
+      const yawBis = (spec.yaw + spec.prevYaw) / 2;
+      const dirBisX = Math.sin(yawBis);
+      const dirBisZ = Math.cos(yawBis);
+      const perpBisX = Math.cos(yawBis);
+      const perpBisZ = -Math.sin(yawBis);
+      const proj = (p: { x: number; z: number }) => {
+        const dx = p.x - spec.start.x;
+        const dz = p.z - spec.start.z;
+        return { along: dx * dirBisX + dz * dirBisZ, across: dx * perpBisX + dz * perpBisZ };
+      };
+      const corners = [proj(spec.start), proj(kp), proj(kc)];
+      const pad = 0.5;
+      const alongMin = Math.min(...corners.map((p) => p.along)) - pad;
+      const alongMax = Math.max(...corners.map((p) => p.along)) + pad;
+      const acrossMin = Math.min(...corners.map((p) => p.across)) - pad;
+      const acrossMax = Math.max(...corners.map((p) => p.across)) + pad;
+      const depth = alongMax - alongMin;
+      const width = acrossMax - acrossMin;
+      const alongMid = (alongMin + alongMax) / 2;
+      const acrossMid = (acrossMin + acrossMax) / 2;
+
+      const mat = new StandardMaterial(`jointMat_${spec.index}`, this.scene);
+      mat.diffuseColor = Color3.FromHexString(spec.prevColor);
+      mat.specularColor = Color3.Black();
+      const patch = MeshBuilder.CreateBox(`joint_${spec.index}`, { width, height: 0.08, depth }, this.scene);
+      patch.material = mat;
+      patch.rotation.y = yawBis;
+      patch.position.set(
+        spec.start.x + dirBisX * alongMid + perpBisX * acrossMid,
+        0,
+        spec.start.z + dirBisZ * alongMid + perpBisZ * acrossMid
+      );
+      patch.checkCollisions = true;
+      this.disposables.push(patch, mat);
+
+      // --- 2) забор-заглушка между краями стен на внешней стороне изгиба ---
       const fx = kc.x - kp.x;
       const fz = kc.z - kp.z;
       const fLen = Math.hypot(fx, fz);
@@ -249,28 +293,57 @@ export class SectionChunk {
     }
 
     // --- 3) бордюры-«уши» по кромке входа при разной ширине секций ---
-    const diffHalf = Math.abs(curHalf - prevHalf);
-    if (diffHalf > 0.35) {
-      const midHalf = Math.min(curHalf, prevHalf) + diffHalf / 2;
-      const halfLen = diffHalf * 0.55;
+    // ВАЖНО: раньше формула клала «уши» СИММЕТРИЧНО вокруг spec.start
+    // (±midHalf), что верно только если предыдущая и текущая секции
+    // делят одну осевую линию. У веток развилки и схождения J это не
+    // так — они смещены вбок на ±SECTION_WIDTH/4, — и старая формула
+    // сажала бордюры мимо: либо в пустоту за пределами всего коридора,
+    // либо горбом высотой 0.6 прямо посреди пола соседней ветки (видно
+    // как «стены не стыкуются, разной высоты»). Считаем реальную
+    // проекцию prevEnd на ось ТЕКУЩЕЙ секции — без предположения об
+    // общем центре — и «ухо» ставим только там, где предыдущая секция
+    // ДЕЙСТВИТЕЛЬНО торчит за пределы текущей.
+    //
+    // Ветки развилки в «ушах» не нуждаются вовсе: их единственная
+    // «оголённая» кромка обращена к территории соседней ветки, которая
+    // либо построена и сама даёт пол, либо недостижима (за барьером
+    // развилки) — а с внешней стороны у ветки с самого стыка уже стоит
+    // её собственная полновысотная стена (buildWalls), см. WorldGenerator:
+    // ветка размером SECTION_WIDTH/2 занимает ровно половину ширины
+    // родителя, без зазора.
+    if (!spec.forkBranch) {
       const perpCX = Math.cos(spec.yaw);
       const perpCZ = -Math.sin(spec.yaw);
-      const eMat = new StandardMaterial(`edgeMat_${spec.index}`, this.scene);
-      eMat.diffuseColor = Color3.FromHexString("#8a8f98");
-      eMat.specularColor = Color3.Black();
-      for (const s of [1, -1]) {
-        const edge = MeshBuilder.CreateBox(
-          `edge_${spec.index}_${s > 0 ? "r" : "l"}`,
-          { width: halfLen * 2, height: 0.6, depth: 0.3 },
-          this.scene
-        );
-        edge.material = eMat;
-        edge.rotation.y = spec.yaw;
-        edge.position.set(spec.start.x + perpCX * (s * midHalf), 0.3, spec.start.z + perpCZ * (s * midHalf));
-        edge.checkCollisions = true;
-        this.disposables.push(edge);
+      const prevCenterU = (spec.prevEnd.x - spec.start.x) * perpCX + (spec.prevEnd.z - spec.start.z) * perpCZ;
+      const prevMin = prevCenterU - prevHalf;
+      const prevMax = prevCenterU + prevHalf;
+      const curMin = -curHalf;
+      const curMax = curHalf;
+
+      const gaps: { center: number; halfLen: number }[] = [];
+      const leftGap = curMin - prevMin; // предыдущая секция торчит левее текущей
+      if (leftGap > 0.35) gaps.push({ center: (prevMin + curMin) / 2, halfLen: leftGap / 2 });
+      const rightGap = prevMax - curMax; // предыдущая секция торчит правее текущей
+      if (rightGap > 0.35) gaps.push({ center: (curMax + prevMax) / 2, halfLen: rightGap / 2 });
+
+      if (gaps.length > 0) {
+        const eMat = new StandardMaterial(`edgeMat_${spec.index}`, this.scene);
+        eMat.diffuseColor = Color3.FromHexString("#8a8f98");
+        eMat.specularColor = Color3.Black();
+        for (const gap of gaps) {
+          const edge = MeshBuilder.CreateBox(
+            `edge_${spec.index}_${gap.center >= 0 ? "r" : "l"}`,
+            { width: gap.halfLen * 2, height: 0.6, depth: 0.3 },
+            this.scene
+          );
+          edge.material = eMat;
+          edge.rotation.y = spec.yaw;
+          edge.position.set(spec.start.x + perpCX * gap.center, 0.3, spec.start.z + perpCZ * gap.center);
+          edge.checkCollisions = true;
+          this.disposables.push(edge);
+        }
+        this.disposables.push(eMat);
       }
-      this.disposables.push(eMat);
     }
   }
 

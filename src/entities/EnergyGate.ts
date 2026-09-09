@@ -64,6 +64,16 @@ export class EnergyGate {
     this.barrier.rotation.y = opts.yaw;
     this.barrier.position.set(opts.x, 2, opts.z);
     this.barrier.checkCollisions = true;
+    // Пометка для Babylon Inspector и console.scene: фильтр в дереве сцены
+    // (mesh -> metadata) сразу выдаёт "что это за барьер", без раскопок по id.
+    this.barrier.metadata = {
+      kind: "gateBarrier",
+      gateId: opts.id,
+      schoolId: opts.schoolId,
+      requiredSpells: opts.requiredSpells,
+      fork: !!opts.fork,
+      width: opts.width,
+    };
 
     // Односторонний блок: существует заранее (невидимый), чтобы переживать
     // пересборку секции стримером, но с отключённой коллизией — включается
@@ -79,6 +89,12 @@ export class EnergyGate {
           block.position.set(opts.x, 2, opts.z);
           block.isVisible = false;
           block.checkCollisions = false;
+          block.metadata = {
+            kind: "gateOneWay",
+            gateId: opts.id,
+            schoolId: opts.schoolId,
+            armed: false,
+          };
           return block;
         })()
       : null;
@@ -128,6 +144,10 @@ export class EnergyGate {
     if (dot > 1.0) {
       this.oneWayArmed = true;
       this.oneWayBlock.checkCollisions = true;
+      // Синхронизируем пометку: в инспекторе сразу видно, почему блок внезапно
+      // стал коллизионным (fork-развилка → однонаправленный запор).
+      const meta = this.oneWayBlock.metadata as { armed: boolean } | null;
+      if (meta) meta.armed = true;
     }
   }
 

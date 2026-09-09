@@ -48,6 +48,16 @@ export class FogManager {
         plane.position.set(pos.x, FogManager.FOG_HEIGHT / 2, pos.z);
         plane.visibility = 0;
         plane.isVisible = false;
+        // Пометка для инспектора/фильтров: «fog» с конкретным sectionIndex
+        // и planeIndex (0 — ближняя к секции, 1 — дальняя). Помогает понять,
+        // какая именно плоскость внезапно проявилась/скрылась.
+        plane.metadata = {
+          kind: "fog",
+          sectionIndex: section.index,
+          planeIndex: p,
+          sectionTier: section.tier,
+          sectionYaw: section.yaw,
+        };
         planes.push(plane);
       }
       this.entries.push({ planes, visibility: 0 });
@@ -61,20 +71,46 @@ export class FogManager {
    */
   public update(frontierIndex: number, deltaSeconds: number): void {
     if (frontierIndex === this.lastFrontier && this.settled) return;
-    this.lastFrontier = frontierIndex;
+
+    if (frontierIndex !== this.lastFrontier) {
+      // Логируем только реальные переключения frontier — плавное гашение
+      // старой стены и разгорание новой (это и есть «появляются/исчезают
+      // плоскости» при движении игрока).
+      // eslint-disable-next-line no-console
+      console.log(`[fog] frontier ${this.lastFrontier} -> ${frontierIndex}`);
+      this.lastFrontier = frontierIndex;
+    }
 
     const k = Math.min(1, deltaSeconds * FogManager.FADE_SPEED);
     let settled = true;
     for (let i = 0; i < this.entries.length; i++) {
       const target = i === frontierIndex ? 1 : 0;
       const e = this.entries[i];
+      const prevVisible = e.visibility > 0.01;
       const v = target > e.visibility ? Math.min(target, e.visibility + k) : Math.max(target, e.visibility - k);
       if (Math.abs(v - target) > 0.005) settled = false;
       e.visibility = v;
       const visible = v > 0.01;
       for (const plane of e.planes) {
         plane.visibility = visible ? v : 0;
-        if (plane.isVisible !== visible) plane.isVisible = visible;
+        if (plane.isVisible !== visible) {
+          plane.isVisible = visible;
+          // Пишем только момент появления/исчезновения — иначе заспамит
+          // каждый кадр (FADE_SPEED=2.5, при резкой смене видимости).
+          if (visible) {
+            const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
+            // eslint-disable-next-line no-console
+            console.log(
+              `[fog] +plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
+            );
+          } else if (prevVisible) {
+            const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
+            // eslint-disable-next-line no-console
+            console.log(
+              `[fog] -plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
+            );
+          }
+        }
       }
     }
     this.settled = settled;

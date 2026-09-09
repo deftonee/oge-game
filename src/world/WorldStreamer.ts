@@ -17,20 +17,43 @@ import { EnergyGate } from "../entities/EnergyGate";
  * секции определяется пространственно: ближайшая к точке осевая линия.
  * frontierIndex() — самый дальний построенный индекс: за ним туман
  * (FogManager), скрывающий путь до башни.
+ *
+ * Переключение секции — с ГИСТЕРЕЗИСОМ (см. sectionAt): у стыка оси соседних
+ * секций сходятся в одной точке, разница расстояний ~0, и без запаса любое
+ * покачивание игрока вперёд-назад переключало бы индекс каждый кадр, заставляя
+ * окно перестраиваться (мигание геометрии и тумана у ворот).
  */
 export class WorldStreamer {
   private chunks: SectionChunk[];
   private built = new Set<number>();
   /**
-   * Последний выбранный индекс. Нужен как ти-брейк при ПАРИТЕТЕ дистанций:
-   * ось схождения J строится на продолжении оси родителя (jStart = cursor +
-   * dir*branchLen), поэтому на перекрытом участке [branchLen, parent.length]
-   * расстояния до обеих осей тождественно равны и sectionAt дрожит между
-   * ними, выгружая секцию под игроком. При |d1 - d2| < TIE_EPS держимся за
-   * текущую секцию; реальный уход даёт растущую разницу и переключение.
+   * Последний выбранный индекс («текущая секция»). Используется как состояние
+   * гистерезиса: section переключается на другую секцию только когда её ось
+   * стала заметно ближе (SWITCH_HYSTERESIS), а не на волоске расстояния.
    */
   private lastSectionIndex = 0;
-  private static readonly TIE_EPS = 0.25;
+  /**
+   * Мёртвая зона переключения (метры): пока лучшая альтернатива не ближе
+   * текущей секции минимум на эту величину, держим текущую. Меньше ширины
+   * коридора, но заметно больше амплитуды «дребезга» игрока у границы.
+   */
+  private static readonly SWITCH_HYSTERESIS = 2;
+  /**
+   * Минимальная «глубина входа» в ветку развилки (метры по её оси), начиная
+   * с которой игрок считается зашедшим в ветку. Должна быть больше зоны
+   * одностороннего блока у ворот (~1 м от линии ворот): пока игрок в мёртвой
+   * зоне у стыка, переключения нет, а после прохода блока вернуться нельзя —
+   * переключение на ветку происходит один раз.
+   */
+  private static readonly FORK_ENTRY_M = 2;
+  /**
+   * Мягкая выгрузка обычных секций: уже построенный чанк не разбирается сразу
+   * при выходе из окна стриминга (±1), а держится, пока игрок не ушёл на это
+   * число индексов. Покачивание на границе двух секций (в т.ч. выход из
+   * ветки развилки в схождение и обратно) перестаёт перестраивать окно и
+   * откатывать туман: frontier = max построенный индекс остаётся стабильным.
+   */
+  private static readonly DISPOSE_MARGIN = 2;
 
   constructor(scene: Scene, world: WorldSpec, private gameState: GameState) {
     this.chunks = world.sections.map((s) => new SectionChunk(scene, s));
@@ -45,57 +68,109 @@ export class WorldStreamer {
    * развилки: ветки A/B делят индекс N+1, схождение N+2, а массив растёт на
    * 4 позиции. Возврат позиции в массиве выгружал секцию под игроком на
    * развилке №2+ (баг «мир перегенерируется возле игрока»).
+   *
+   * Переключение — гистерезисное (Schmitt trigger): секция становится
+   * «текущей» только когда её ось оказалась заметно ближе текущей. Иначе у
+   * ворот (стык осей в одной точке) покачивание игрока на ±1 м переключало
+   * индекс каждый кадр и окно перестраивалось без причины.
    */
   public sectionAt(x: number, z: number): number {
+    const current = this.lastSectionIndex;
+    let currentDist = Infinity;
+    let bestIndex = -1;
     let bestDist = Infinity;
-    const candidates: SectionSpec[] = [];
+
     for (const chunk of this.chunks) {
       const s = chunk.spec;
+      // Ветка развилки не может быть секцией игрока, пока он не зашёл в неё
+      // РЕАЛЬНО: ось ветки начинается у САМИХ ворот родителя, поэтому стоя у
+      // открытых ворот (но не войдя) игрок получает дистанцию ~0 до оси ветки,
+      // и index прыгал на ветку ДО входа. Дребезг: открыл одну створку, ходишь
+      // вдоль стыка между ней и закрытой — окно перестраивалось каждый кадр.
+      // Ветка «занята» только когда проекция игрока на её ось ушла за порог
+      // FORK_ENTRY_M (за зоной одностороннего блока ворот, ~1 м): обратно уже
+      // не вернуться, переключение один раз, без дребезга.
+      if (s.forkBranch) {
+        const dx = s.end.x - s.start.x;
+        const dz = s.end.z - s.start.z;
+        const lenSq = dx * dx + dz * dz;
+        if (lenSq < 1e-12) continue;
+        const t = ((x - s.start.x) * dx + (z - s.start.z) * dz) / Math.sqrt(lenSq); // метры по оси ветки
+        if (!this.gameState.isGateOpen(s.forkGateId ?? "") || t < WorldStreamer.FORK_ENTRY_M) continue;
+      }
+
       const d = distPointToSegment(x, z, s.start.x, s.start.z, s.end.x, s.end.z);
-      if (d < bestDist - WorldStreamer.TIE_EPS) {
+      if (s.index === current && d < currentDist) currentDist = d;
+      if (d < bestDist) {
         bestDist = d;
-        candidates.length = 0;
-        candidates.push(s);
-      } else if (Math.abs(d - bestDist) <= WorldStreamer.TIE_EPS) {
-        candidates.push(s);
+        bestIndex = s.index;
       }
     }
-    // При паритете (совпадающие оси родителя и схождения J) держимся за
-    // текущую секцию; если её нет среди кандидатов — выбираем ближайшую
-    // ВПЕРЁД по индексу (не откатываемся назад, иначе frontier/туман прыгают).
-    let chosen = candidates.find((s) => s.index === this.lastSectionIndex);
-    if (!chosen) {
-      const forward = candidates.filter((s) => s.index > this.lastSectionIndex);
-      chosen =
-        forward.length > 0
-          ? forward.reduce((a, b) => (b.index < a.index ? b : a))
-          : candidates.reduce((a, b) => (b.index > a.index ? b : a));
+
+    if (bestIndex < 0) return current; // пустой мир — не бывает, но страховка
+
+    // Пока лучшая альтернатива не стала заметно ближе текущей секции
+    // (currentDist - bestDist > SWITCH_HYSTERESIS), держимся за текущую:
+    // реальный уход игрока даёт растущую разницу и переключение.
+    if (bestIndex !== current && bestDist + WorldStreamer.SWITCH_HYSTERESIS >= currentDist) {
+      return current;
     }
-    this.lastSectionIndex = chosen.index;
-    return chosen.index;
+    this.lastSectionIndex = bestIndex;
+    return bestIndex;
   }
 
   public update(x: number, z: number): void {
     const currentIndex = this.sectionAt(x, z);
 
     this.built.clear();
+    const newlyBuilt: number[] = [];
+    const newlyDisposed: number[] = [];
     for (let i = 0; i < this.chunks.length; i++) {
       const chunk = this.chunks[i];
       const spec = chunk.spec;
       const inWindow = Math.abs(spec.index - currentIndex) <= 1;
 
-      // Ветки развилки (forkBranch): строятся, пока игрок стоит у развилки
-      // (видно ОБА параллельных коридора), либо когда выбрал эту ветку
-      // (ворота открыты) — невыбранная ветка больше не прорисовывается.
-      let shouldBeBuilt = inWindow;
+      let shouldBeBuilt: boolean;
       if (spec.forkBranch) {
-        const chosen = this.gameState.isGateOpen(spec.forkGateId ?? "");
-        shouldBeBuilt = inWindow && (chosen || currentIndex === (spec.forkParentIndex ?? -1));
+        const p = spec.forkParentIndex ?? -1;
+        // Ветки развилки видны, пока игрок в «зоне развилки»: родитель
+        // (видны ОБА коридора), любая из веток или схождение J
+        // (index от parent до parent+2). Выход из выбранной ветки в J и
+        // обратно не должен выгружать «второй путь» (иначе у входа в J —
+        // пустота, можно подойти к стене тумана вплотную) и не должен
+        // дёргать окно: ветка построена при current=ветка и current=J
+        // одинаково. Ушёл за J (current > parent+2) — ветки выгружаются
+        // сразу, без мягкого буфера (позади развилки они не нужны).
+        shouldBeBuilt = inWindow && currentIndex >= p && currentIndex <= p + 2;
+      } else {
+        // Обычные секции: мягкая выгрузка — уже построенный чанк держится
+        // до DISPOSE_MARGIN индексов после выхода из окна (вперёд буфер НЕ
+        // строит — только удерживает уже собранное). Покачивание на границе
+        // секций (выход из ветки в схождение и обратно) больше не
+        // перестраивает окно и не дёргает туман: frontier (max построенный
+        // индекс) не откатывается.
+        shouldBeBuilt =
+          inWindow || (chunk.isBuilt && Math.abs(spec.index - currentIndex) <= WorldStreamer.DISPOSE_MARGIN);
       }
 
-      if (shouldBeBuilt && !chunk.isBuilt) chunk.build(this.gameState);
-      else if (!shouldBeBuilt && chunk.isBuilt) chunk.dispose();
+      if (shouldBeBuilt && !chunk.isBuilt) {
+        chunk.build(this.gameState);
+        newlyBuilt.push(spec.index);
+      } else if (!shouldBeBuilt && chunk.isBuilt) {
+        chunk.dispose();
+        newlyDisposed.push(spec.index);
+      }
       if (chunk.isBuilt) this.built.add(spec.index);
+    }
+
+    // Сводный лог кадровых переключений стримера. Печатаем только когда
+    // что-то реально поменялось (построили/разобрали хоть одну секцию),
+    // иначе каждый кадр спамит одно и то же.
+    if (newlyBuilt.length > 0 || newlyDisposed.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[stream] player=(${x.toFixed(2)},${z.toFixed(2)}) section=${currentIndex} +build=[${newlyBuilt.join(",")}] -dispose=[${newlyDisposed.join(",")}] window=[${Array.from(this.built).sort((a, b) => a - b).join(",")}]`
+      );
     }
   }
 

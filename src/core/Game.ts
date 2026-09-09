@@ -80,7 +80,52 @@ export class Game {
     // связать с реальным инстансом можно только после его создания.
     proximity.bindMobile(() => this.mobile.isActive);
 
+    // Debug-панель Babylon Inspector: динамический импорт, чтобы не тянуть
+    // её в прод-сборку (import.meta.env.DEV === false → tree-shaken в build).
+    // Поднимается по Backquote (`), закрывается повторно или по Esc.
+    this.bindInspectorHotkey(canvas);
+
     this.startRenderLoop();
+  }
+
+  private bindInspectorHotkey(canvas: HTMLCanvasElement): void {
+    // Vite заменяет import.meta.env.DEV статически; в проде блок вырезается.
+    if (!import.meta.env.DEV) return;
+    let loaded = false;
+    let inspectorVisible = false;
+    const toggle = async (): Promise<void> => {
+      try {
+        if (!loaded) {
+          // Inspector — отдельный пакет: side-effect-импорт цепляет класс
+          // BABYLON.Debug к window. Без него scene.debugLayer.show() падает
+          // с "BJSINSPECTOR is undefined" / "BABYLON.Debug is undefined"
+          // (Babylon 7.x: класс лежит в @babylonjs/inspector, а не в core).
+          await import("@babylonjs/inspector");
+          loaded = true;
+        }
+        if (inspectorVisible) {
+          this.scene.debugLayer.hide();
+          inspectorVisible = false;
+        } else {
+          this.scene.debugLayer.show({ overlay: true, embedMode: true });
+          inspectorVisible = true;
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[debug] failed to toggle Babylon Inspector:", err);
+      }
+    };
+    window.addEventListener("keydown", (e) => {
+      // Backquote (`) — без шорткатов-модификаторов; не срабатывает в input/textarea,
+      // чтобы не мешать вводу текста в меню/чате.
+      if (e.key !== "`" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      e.preventDefault();
+      void toggle();
+    });
+    // Не блокируем canvas-фокус — Inspector накладывается через overlay.
+    void canvas;
   }
 
   private startRenderLoop(): void {
