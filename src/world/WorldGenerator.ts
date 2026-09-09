@@ -385,8 +385,16 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       const off = SECTION_WIDTH / 4;
       const branchTier = Math.min(3, tier + 1);
 
+      // ВАЖНО: ветки и J начинаются у КОНЦА родителя (там, где стоят её
+      // ворота — см. GateSpec/"Выходные ворота ... стоят на её КОНЦЕ"),
+      // а не у cursor: на этом шаге цикла cursor всё ещё указывает на
+      // НАЧАЛО parent (переменная обновляется только в самом низу цикла).
+      // Использование cursor вместо end сажало ветки и схождение J поверх
+      // собственного коридора родителя (совпадающие/перекрывающиеся оси на
+      // добрый десяток метров) — отсюда и «мир перестраивается под ногами»
+      // возле развилок, и накладывающиеся полы/стены в этой зоне.
       const mkBranch = (branch: "a" | "b", sign: number, gateId: string): SectionSpec => {
-        const start = { x: cursor.x - perpX * off * sign, z: cursor.z - perpZ * off * sign };
+        const start = { x: end.x - perpX * off * sign, z: end.z - perpZ * off * sign };
         const branchEnd = { x: start.x + dirX * branchLen, z: start.z + dirZ * branchLen };
         const spec = makeSection(specIndex + 1, branchTier, SECTION_WIDTH / 2, branchLen, start, branchEnd, yaw, parent);
         spec.forkBranch = branch;
@@ -399,7 +407,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       const branchB = mkBranch("b", -1, parent.gates[1].id);
 
       // Общая секция-схождение: вход J — одна кромка с концами обеих веток.
-      const jStart = { x: cursor.x + dirX * branchLen, z: cursor.z + dirZ * branchLen };
+      const jStart = { x: end.x + dirX * branchLen, z: end.z + dirZ * branchLen };
       const jLength = randRange(rng, SECTION_LENGTH.min, SECTION_LENGTH.max);
       const jEnd = localToWorld({ start: jStart, yaw }, 0, jLength);
       const join = makeSection(specIndex + 2, tier, SECTION_WIDTH, jLength, jStart, jEnd, yaw, branchA);

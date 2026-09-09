@@ -125,6 +125,21 @@ for (let seed = 1; seed <= 200; seed++) {
           distPointToSegment(prevPrev.end.x, prevPrev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
           `seed ${seed}: конец ветки A не на кромке J`
         );
+
+        // Регрессия: J тоже не должно накладываться на коридор родителя.
+        // sections.push(parent, branchA, branchB, join) кладёт их подряд,
+        // поэтому родитель — три позиции назад от join.
+        const parent = sections[i - 3];
+        if (parent && parent.gates.length === 2) {
+          const dirX = Math.sin(parent.yaw);
+          const dirZ = Math.cos(parent.yaw);
+          const projJoinStart = (s.start.x - parent.start.x) * dirX + (s.start.z - parent.start.z) * dirZ;
+          check(
+            projJoinStart >= parent.length - 1e-6,
+            `seed ${seed}: схождение ${s.index} накладывается на коридор родителя ${parent.index} ` +
+              `(J начинается на ${projJoinStart.toFixed(1)} по оси родителя, а сам родитель кончается на ${parent.length.toFixed(1)})`
+          );
+        }
       }
     }
 
@@ -140,6 +155,24 @@ for (let seed = 1; seed <= 200; seed++) {
         const dirZ = Math.cos(s.yaw);
         check(Math.abs(dx * dirX + dz * dirZ) < 1e-6, `seed ${seed}: ветки должны быть смещены поперёк, а не вдоль`);
         check(Math.abs(Math.hypot(dx, dz) - SECTION_WIDTH / 2) < 1e-6, `seed ${seed}: смещение веток = w/2`);
+      }
+
+      // Регрессия: ветка обязана НАЧИНАТЬСЯ у КОНЦА родителя (где стоят её
+      // ворота), а не поверх его собственного коридора. Проецируем начало
+      // ветки на ось родителя (родитель и ветка всегда сонаправлены) —
+      // проекция должна совпасть с parent.length. Если вместо этого ветка
+      // строилась от НАЧАЛА родителя (баг), проекция окажется ≈0, и это
+      // всплывёт здесь.
+      const parent = sections.find((o) => o.index === s.forkParentIndex);
+      if (parent) {
+        const dirX = Math.sin(parent.yaw);
+        const dirZ = Math.cos(parent.yaw);
+        const proj = (s.start.x - parent.start.x) * dirX + (s.start.z - parent.start.z) * dirZ;
+        check(
+          Math.abs(proj - parent.length) < 1e-6,
+          `seed ${seed}: ветка ${s.index} накладывается на коридор родителя ${parent.index} ` +
+            `(начало ветки проецируется на ${proj.toFixed(1)} по оси родителя вместо ${parent.length.toFixed(1)})`
+        );
       }
     }
   }
