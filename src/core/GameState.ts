@@ -25,6 +25,8 @@ export class GameState {
   private progress = new Map<string, SpellProgress>();
   private defeatedWitchIds = new Set<string>();
   private openedGateIds = new Set<string>();
+  private openedChestIds = new Set<string>();
+  private collectedBookPageIds = new Set<string>();
 
   constructor() {
     for (const spell of ALL_SPELLS) {
@@ -62,6 +64,30 @@ export class GameState {
 
   public isGateOpen(gateId: string): boolean {
     return this.openedGateIds.has(gateId);
+  }
+
+  public openChest(chestId: string): void {
+    this.openedChestIds.add(chestId);
+  }
+
+  public isChestOpen(chestId: string): boolean {
+    return this.openedChestIds.has(chestId);
+  }
+
+  public collectBookPage(pageId: string): void {
+    this.collectedBookPageIds.add(pageId);
+  }
+
+  public hasBookPage(pageId: string): boolean {
+    return this.collectedBookPageIds.has(pageId);
+  }
+
+  public getCollectedBookPageIds(): string[] {
+    return [...this.collectedBookPageIds];
+  }
+
+  public getOpenedChestIds(): string[] {
+    return [...this.openedChestIds];
   }
 
   public learn(spellId: string): void {
