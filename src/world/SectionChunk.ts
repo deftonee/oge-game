@@ -1,5 +1,5 @@
 import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
-import { SectionSpec, ScatterSeed, BorderStyle, localToWorld } from "./WorldGenerator";
+import { SectionSpec, ScatterSeed, BorderStyle, localToWorld, yawAt } from "./WorldGenerator";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
@@ -14,9 +14,11 @@ import { GameState } from "../core/GameState";
  * Побеждённые ведьмы (gameState.isWitchDefeated) при пересборке не создаются заново.
  *
  * Секция лежит в собственной локальной системе координат (x — поперёк,
- * z — вдоль коридора), повёрнутой в мире на spec.yaw: все сущности и декор
- * из spec заданы в локальных координатах и переводятся в мировые здесь.
- * На стыке изогнутых секций ставится диск-заплатка, закрывающий зазор пола.
+ * z — вдоль дуги коридора постоянной кривизны spec.curvature): все сущности
+ * и декор из spec заданы в локальных координатах и переводятся в мировые
+ * здесь же (toWorld). Пол и стены — не плоский прямоугольник/бокс, а лента
+ * (ribbon), повторяющая изгиб (см. curvePath) — соседние секции всегда
+ * встречаются с равным курсом, без излома и без диска-заплатки на стыке.
  * Выходные ворота (spec.gates) стоят на КОНЦЕ секции.
  */
 export class SectionChunk {
@@ -82,14 +84,19 @@ export class SectionChunk {
         );
         continue;
       }
-      const pos = this.toWorld(g.x, this.spec.length - 0.3);
+      const gateZ = this.spec.length - 0.3;
+      const pos = this.toWorld(g.x, gateZ);
       const gate = new EnergyGate(this.scene, {
         id: g.id,
         requiredSpells: g.requiredSpells,
         schoolId: g.schoolId,
         x: pos.x,
         z: pos.z,
-        yaw: this.spec.yaw,
+        // Барьер сам по себе плоский и прямой независимо от кривизны
+        // коридора — но его ориентация обязана следовать КАСАТЕЛЬНОЙ в точке,
+        // где он стоит (конец секции), а не постоянному курсу её начала —
+        // иначе на изогнутой секции барьер встанет под углом к полу.
+        yaw: yawAt(this.spec, gateZ),
         width: g.width,
         fork: g.fork,
       });
@@ -125,22 +132,45 @@ export class SectionChunk {
 
   /** Локальные координаты секции → мировые. */
   private toWorld(localX: number, localZ: number): { x: number; z: number } {
-    return localToWorld({ start: this.spec.start, yaw: this.spec.yaw }, localX, localZ);
+    return localToWorld(this.spec, localX, localZ);
+  }
+
+  /** Длина одного шага дискретизации дуги (м) — компромисс гладкости/полигонажа. */
+  private static readonly CURVE_SEGMENT_LENGTH = 2.5;
+  private static readonly WALL_HEIGHT = 2.5;
+
+  private curveSteps(): number {
+    return Math.max(1, Math.round(this.spec.length / SectionChunk.CURVE_SEGMENT_LENGTH));
+  }
+
+  /**
+   * Путь вдоль оси секции на фиксированном поперечном смещении localX и
+   * высоте y — уже в МИРОВЫХ координатах (учитывает кривизну через toWorld).
+   * Общий строительный блок для пола и стен: они больше не единый плоский
+   * прямоугольник/бокс, а лента (ribbon), повторяющая изгиб секции.
+   */
+  private curvePath(localX: number, y: number): Vector3[] {
+    const steps = this.curveSteps();
+    const points: Vector3[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const z = (this.spec.length * i) / steps;
+      const p = this.toWorld(localX, z);
+      points.push(new Vector3(p.x, y, p.z));
+    }
+    return points;
   }
 
   private buildFloor(): void {
-    const center = this.toWorld(0, this.spec.length / 2);
-    const floor = MeshBuilder.CreateGround(
+    const half = this.spec.width / 2;
+    const floor = MeshBuilder.CreateRibbon(
       `floor_${this.spec.index}`,
-      { width: this.spec.width, height: this.spec.length },
+      { pathArray: [this.curvePath(-half, 0), this.curvePath(half, 0)], sideOrientation: Mesh.DOUBLESIDE },
       this.scene
     );
     const mat = new StandardMaterial(`floorMat_${this.spec.index}`, this.scene);
     mat.diffuseColor = Color3.FromHexString(this.spec.color);
     mat.specularColor = Color3.Black();
     floor.material = mat;
-    floor.rotation.y = this.spec.yaw;
-    floor.position.set(center.x, 0, center.z);
     floor.checkCollisions = true;
     this.disposables.push(floor, mat);
   }
@@ -149,21 +179,27 @@ export class SectionChunk {
     const wallMat = new StandardMaterial(`wallMat_${this.spec.index}`, this.scene);
     wallMat.diffuseColor = Color3.FromHexString("#4a4d52");
     wallMat.specularColor = Color3.Black();
-    const leftCenter = this.toWorld(-this.spec.width / 2, this.spec.length / 2);
-    const rightCenter = this.toWorld(this.spec.width / 2, this.spec.length / 2);
+    const half = this.spec.width / 2;
+    const h = SectionChunk.WALL_HEIGHT;
 
-    const left = MeshBuilder.CreateBox(
+    // Раньше правая стена была клоном левой (простой сдвиг — секция прямая,
+    // обе стены одной формы). На дуге левая и правая стена — РАЗНЫЕ кривые
+    // (внутренняя/внешняя сторона поворота, разный эффективный радиус),
+    // клонировать нечего — строим ленту для каждой отдельно.
+    const left = MeshBuilder.CreateRibbon(
       `wallL_${this.spec.index}`,
-      { width: 0.3, height: 2.5, depth: this.spec.length },
+      { pathArray: [this.curvePath(-half, 0), this.curvePath(-half, h)], sideOrientation: Mesh.DOUBLESIDE },
       this.scene
     );
-    left.rotation.y = this.spec.yaw;
-    left.position.set(leftCenter.x, 1.25, leftCenter.z);
     left.material = wallMat;
     left.checkCollisions = true;
 
-    const right = left.clone(`wallR_${this.spec.index}`);
-    right.position.set(rightCenter.x, 1.25, rightCenter.z);
+    const right = MeshBuilder.CreateRibbon(
+      `wallR_${this.spec.index}`,
+      { pathArray: [this.curvePath(half, 0), this.curvePath(half, h)], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene
+    );
+    right.material = wallMat;
     right.checkCollisions = true;
 
     this.disposables.push(left, right, wallMat);
@@ -194,21 +230,18 @@ export class SectionChunk {
   }
 
   /**
-   * Ремонт стыка с предыдущей секцией — три вещи (закрывает все известные
-   * дыры и провалы):
+   * Ремонт стыка с предыдущей секцией: бордюры-«уши» при смене ширины
+   * коридора (расширение 8→24 на входе, сужение на вилках развилки) — у
+   * входа в более широкую/узкую секцию кромка пола обрывается в пустоту,
+   * низкие серые бордюры с коллизией не дают сойти с пола.
    *
-   * 1) Пол-заплатка клина при изгибе: два прямоугольных пола встречаются
-   *    под углом, и на ВНЕШНЕЙ стороне стыка остаётся клиновидный зазор —
-   *    туда игрок проваливался сквозь старый диск (тот был без коллизий и
-   *    темнее пола). Заплатка — бокс по габаритам клина, цвет = цвет
-   *    ПРЕДЫДУЩЕЙ секции (неотличим от пола), с коллизией.
-   * 2) Забор-заглушка на внешней стороне изгиба: между концом стены
-   *    предыдущей и началом стены текущей секции зияет щель — закрываем
-   *    стеной-боксом (это и есть «забор вокруг заплатки»).
-   * 3) Бордюры-«уши» при смене ширины коридора (расширение 8→24 и сужение
-   *    на вилках): у входа в более широкую/узкую секцию кромка пола
-   *    обрывается в пустоту — низкие серые бордюры с коллизией не дают
-   *    сойти с пола.
+   * Раньше здесь ещё чинился клиновидный зазор пола и щель в заборе на
+   * ВНЕШНЕЙ стороне изгиба (диск-заплатка по jointRadius) — секции были
+   * прямыми, и мгновенный поворот yaw на стыке буквально раздвигал два
+   * плоских прямоугольника под углом. Теперь секции — дуги ПОСТОЯННОЙ
+   * кривизны (см. SectionSpec.curvature), и соседние секции по построению
+   * ВСЕГДА встречаются с равным курсом (конец предыдущей = начало текущей) —
+   * ни клина, ни щели в заборе больше не возникает, чинить нечего.
    */
   private buildJointPatch(): void {
     const spec = this.spec;
@@ -216,83 +249,8 @@ export class SectionChunk {
 
     const curHalf = spec.width / 2;
     const prevHalf = spec.prevWidth / 2;
-    const dYaw = this.normAngle(spec.yaw - spec.prevYaw);
 
-    // --- 1) пол-заплатка клина внешнего угла при изгибе + 2) забор-заглушка ---
-    if (spec.jointRadius > 0 && Math.abs(dYaw) > 0.02) {
-      const side = dYaw > 0 ? 1 : -1;
-      const perpPX = Math.cos(spec.prevYaw);
-      const perpPZ = -Math.sin(spec.prevYaw);
-      const perpCX = Math.cos(spec.yaw);
-      const perpCZ = -Math.sin(spec.yaw);
-      // Углы стен на внешней стороне изгиба — единственные точки, которые
-      // заплатка ОБЯЗАНА накрыть (дальше начинаются сами стены секций).
-      const kp = { x: spec.prevEnd.x + perpPX * (side * prevHalf), z: spec.prevEnd.z + perpPZ * (side * prevHalf) };
-      const kc = { x: spec.start.x + perpCX * (side * curHalf), z: spec.start.z + perpCZ * (side * curHalf) };
-
-      // Заплатку строим как bounding box вершин {P=spec.start, kp, kc} в
-      // системе координат биссектрисы — это математически гарантирует
-      // полное накрытие клина. Старая формула (depth = maxHalf*tan(dYaw))
-      // била мимо: медианный недолёт до kp ~0.76 м, до 1.78 м на резких
-      // поворотах — отсюда щели в полу на внешней стороне почти каждого
-      // изгиба (изгибы — не редкость, они на каждом обычном стыке).
-      const yawBis = (spec.yaw + spec.prevYaw) / 2;
-      const dirBisX = Math.sin(yawBis);
-      const dirBisZ = Math.cos(yawBis);
-      const perpBisX = Math.cos(yawBis);
-      const perpBisZ = -Math.sin(yawBis);
-      const proj = (p: { x: number; z: number }) => {
-        const dx = p.x - spec.start.x;
-        const dz = p.z - spec.start.z;
-        return { along: dx * dirBisX + dz * dirBisZ, across: dx * perpBisX + dz * perpBisZ };
-      };
-      const corners = [proj(spec.start), proj(kp), proj(kc)];
-      const pad = 0.5;
-      const alongMin = Math.min(...corners.map((p) => p.along)) - pad;
-      const alongMax = Math.max(...corners.map((p) => p.along)) + pad;
-      const acrossMin = Math.min(...corners.map((p) => p.across)) - pad;
-      const acrossMax = Math.max(...corners.map((p) => p.across)) + pad;
-      const depth = alongMax - alongMin;
-      const width = acrossMax - acrossMin;
-      const alongMid = (alongMin + alongMax) / 2;
-      const acrossMid = (acrossMin + acrossMax) / 2;
-
-      const mat = new StandardMaterial(`jointMat_${spec.index}`, this.scene);
-      mat.diffuseColor = Color3.FromHexString(spec.prevColor);
-      mat.specularColor = Color3.Black();
-      const patch = MeshBuilder.CreateBox(`joint_${spec.index}`, { width, height: 0.08, depth }, this.scene);
-      patch.material = mat;
-      patch.rotation.y = yawBis;
-      patch.position.set(
-        spec.start.x + dirBisX * alongMid + perpBisX * acrossMid,
-        0,
-        spec.start.z + dirBisZ * alongMid + perpBisZ * acrossMid
-      );
-      patch.checkCollisions = true;
-      this.disposables.push(patch, mat);
-
-      // --- 2) забор-заглушка между краями стен на внешней стороне изгиба ---
-      const fx = kc.x - kp.x;
-      const fz = kc.z - kp.z;
-      const fLen = Math.hypot(fx, fz);
-      if (fLen > 0.35) {
-        const fMat = new StandardMaterial(`jointFenceMat_${spec.index}`, this.scene);
-        fMat.diffuseColor = Color3.FromHexString("#4a4d52");
-        fMat.specularColor = Color3.Black();
-        const fence = MeshBuilder.CreateBox(
-          `jointFence_${spec.index}`,
-          { width: fLen, height: 2.5, depth: 0.3 },
-          this.scene
-        );
-        fence.material = fMat;
-        fence.rotation.y = Math.atan2(fx, fz);
-        fence.position.set((kp.x + kc.x) / 2, 1.25, (kp.z + kc.z) / 2);
-        fence.checkCollisions = true;
-        this.disposables.push(fence, fMat);
-      }
-    }
-
-    // --- 3) бордюры-«уши» по кромке входа при разной ширине секций ---
+    // --- бордюры-«уши» по кромке входа при разной ширине секций ---
     // ВАЖНО: раньше формула клала «уши» СИММЕТРИЧНО вокруг spec.start
     // (±midHalf), что верно только если предыдущая и текущая секции
     // делят одну осевую линию. У веток развилки и схождения J это не
@@ -345,14 +303,6 @@ export class SectionChunk {
         this.disposables.push(eMat);
       }
     }
-  }
-
-  /** Нормализация угла в [-π, π]. */
-  private normAngle(a: number): number {
-    let r = a % (Math.PI * 2);
-    if (r > Math.PI) r -= Math.PI * 2;
-    if (r < -Math.PI) r += Math.PI * 2;
-    return r;
   }
 
   /**

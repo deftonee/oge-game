@@ -1,6 +1,6 @@
 import { Scene } from "@babylonjs/core";
 import { SectionChunk } from "./SectionChunk";
-import { WorldSpec, SectionSpec, distPointToSegment } from "./WorldGenerator";
+import { WorldSpec, SectionSpec, distPointToSectionAxis } from "./WorldGenerator";
 import { GameState } from "../core/GameState";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
@@ -99,7 +99,7 @@ export class WorldStreamer {
         if (!this.gameState.isGateOpen(s.forkGateId ?? "") || t < WorldStreamer.FORK_ENTRY_M) continue;
       }
 
-      const d = distPointToSegment(x, z, s.start.x, s.start.z, s.end.x, s.end.z);
+      const d = distPointToSectionAxis(x, z, s);
       if (s.index === current && d < currentDist) currentDist = d;
       if (d < bestDist) {
         bestDist = d;

@@ -1,5 +1,5 @@
 import { NullEngine, Scene } from "@babylonjs/core";
-import { generateWorld, localToWorld, distPointToSegment } from "../src/world/WorldGenerator";
+import { generateWorld, localToWorld, distPointToSectionAxis } from "../src/world/WorldGenerator";
 import type { SectionSpec, WorldSpec } from "../src/world/WorldGenerator";
 import { WorldStreamer } from "../src/world/WorldStreamer";
 import { FogManager } from "../src/world/FogManager";
@@ -131,7 +131,7 @@ function nearestSpecAt(world: WorldSpec, x: number, z: number): SectionSpec {
   let best = world.sections[0];
   let bestD = Infinity;
   for (const s of world.sections) {
-    const d = distPointToSegment(x, z, s.start.x, s.start.z, s.end.x, s.end.z);
+    const d = distPointToSectionAxis(x, z, s);
     if (d < bestD) {
       bestD = d;
       best = s;
@@ -148,7 +148,7 @@ function nearestSpecAt(world: WorldSpec, x: number, z: number): SectionSpec {
  */
 function someSectionBuiltAt(world: WorldSpec, streamer: WorldStreamer, x: number, z: number): boolean {
   let minD = Infinity;
-  const dists = world.sections.map((s) => distPointToSegment(x, z, s.start.x, s.start.z, s.end.x, s.end.z));
+  const dists = world.sections.map((s) => distPointToSectionAxis(x, z, s));
   for (const d of dists) minD = Math.min(minD, d);
   return world.sections.some((s, i) => dists[i] - minD <= 0.5 && streamer.isChunkBuilt(s));
 }
@@ -448,6 +448,75 @@ function forkExitRegression(seed: number): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Тупик (isDeadEnd): для стриминга дверь в тупик ведёт себя как обычная ветка
+// развилки (строится у закрытых ворот, становится текущей секцией после
+// входа) — но её барьер НЕ односторонний (см. assignExitGates(..., oneWay) в
+// генераторе): можно свободно выйти назад к родителю и уйти через вторую,
+// продолжающую дверь, и дальше мир идёт как обычная развилка (схождение
+// строится, frontier доходит до него), несмотря на то что игрок сначала
+// заглянул в тупик.
+function deadEndBacktrackRegression(seed: number): void {
+  const gs = new GameState();
+  const w = generateWorld(gs, seed);
+  const st = new WorldStreamer(scene, w, gs);
+
+  const parent = w.sections.find(
+    (s) => s.gates.length === 2 && w.sections.some((b) => b.forkParentIndex === s.index && b.isDeadEnd)
+  )!;
+  const branches = w.sections.filter((s) => s.forkParentIndex === parent.index);
+  const deadBranch = branches.find((s) => s.isDeadEnd)!;
+  const liveBranch = branches.find((s) => !s.isDeadEnd)!;
+  const join = w.sections.find((s) => !s.forkBranch && s.index === parent.index + 2)!;
+  const deadGate = parent.gates.find((g) => g.id === deadBranch.forkGateId)!;
+  const liveGate = parent.gates.find((g) => g.id === liveBranch.forkGateId)!;
+
+  check(deadGate.fork !== true, `seed ${seed}: барьер тупика не должен быть односторонним (spec)`);
+  check(
+    liveGate.fork !== true,
+    `seed ${seed}: у развилки-тупика ОБЕ двери не односторонние — иначе выбор "продолжить" навсегда закрыл бы тупик`
+  );
+
+  // Открыли ТОЛЬКО тупик, зашли вглубь него — становится текущей секцией,
+  // ровно как обычная ветка развилки.
+  gs.openGate(deadBranch.forkGateId!);
+  const deep = localToWorld(deadBranch, 0, Math.min(5, deadBranch.length - 1));
+  st.update(deep.x, deep.z);
+  check(st.sectionAt(deep.x, deep.z) === deadBranch.index, `seed ${seed}: тупик не стал текущей секцией после входа`);
+  check(st.isChunkBuilt(deadBranch), `seed ${seed}: тупик не построен изнутри`);
+
+  // Вышли обратно к родителю — тупик не запирает за спиной (в отличие от
+  // настоящей развилки, где именно это призвана предотвращать oneWayBlock).
+  const backward = localToWorld(parent, 0, parent.length - 3);
+  st.update(backward.x, backward.z);
+  check(
+    st.sectionAt(backward.x, backward.z) === parent.index,
+    `seed ${seed}: после выхода из тупика игрок не смог вернуться к родителю`
+  );
+
+  // Пошли через ВТОРУЮ, продолжающую дверь — с этого момента мир обязан вести
+  // себя как обычная развилка (join строится, frontier доходит до него),
+  // несмотря на то что игрок до этого заходил в тупик.
+  gs.openGate(liveBranch.forkGateId!);
+  const liveDeep = localToWorld(liveBranch, 0, liveBranch.length - 1);
+  st.update(liveDeep.x, liveDeep.z);
+  check(st.isChunkBuilt(join), `seed ${seed}: схождение не построено после ухода в продолжающую дверь`);
+
+  const afterJoin = localToWorld(join, 0, join.length - 1);
+  st.update(afterJoin.x, afterJoin.z);
+  check(st.frontierIndex() >= join.index, `seed ${seed}: frontier не дошёл до схождения после захода в тупик`);
+
+  // Тупик выгружается не сразу на выходе из J (DISPOSE_MARGIN держит его,
+  // ровно как невыбранную ветку настоящей развилки — см. forkExitRegression),
+  // а только после ухода в СЛЕДУЮЩУЮ за J секцию.
+  const afterJoinSection = w.sections.find((s) => s.index === join.index + 1);
+  if (afterJoinSection) {
+    const deep = localToWorld(afterJoinSection, 0, Math.min(5, afterJoinSection.length - 2));
+    st.update(deep.x, deep.z);
+    check(!st.isChunkBuilt(deadBranch), `seed ${seed}: тупик остался построен далеко после ухода вперёд по стволу`);
+  }
+}
+
 const hoverSeeds = walkSeeds.slice(0, 6);
 for (const seed of hoverSeeds) {
   forkGateHoverRegression(seed);
@@ -456,6 +525,16 @@ for (const seed of hoverSeeds) {
   hysteresisBandRegression(seed);
 }
 console.log(`покачиваний у ворот: ${hoverSeeds.length} миров (сиды ${hoverSeeds.join(", ")})`);
+
+const deadEndSeeds: number[] = [];
+for (let seed = 1; seed <= 400 && deadEndSeeds.length < 5; seed++) {
+  const w = generateWorld(new GameState(), seed);
+  const hasDeadEnd = w.sections.some((s) => s.isDeadEnd);
+  if (hasDeadEnd) deadEndSeeds.push(seed);
+}
+check(deadEndSeeds.length >= 3, `найдено слишком мало миров с тупиком: ${deadEndSeeds.length}`);
+for (const seed of deadEndSeeds) deadEndBacktrackRegression(seed);
+console.log(`тупиков проверено: ${deadEndSeeds.length} миров (сиды ${deadEndSeeds.join(", ")})`);
 
 console.log(`Проверок: ${checks}, провалов: ${failures}`);
 if (failures > 0) {

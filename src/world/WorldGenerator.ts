@@ -68,21 +68,40 @@ export interface SectionSpec {
   start: { x: number; z: number };
   /** Мировая точка конца осевой линии секции (локальный (0, length)). */
   end: { x: number; z: number };
-  /** Направление коридора в мире, рад (0 = +Z). */
+  /** Направление коридора в мире В НАЧАЛЕ секции, рад (0 = +Z). */
   yaw: number;
+  /**
+   * Кривизна оси секции, рад/метр: курс в точке пути s равен `yaw +
+   * curvature*s` — секция является дугой ПОСТОЯННОЙ кривизны (0 — прямая,
+   * как ветки/схождения развилки и самая первая секция). Соседняя секция
+   * всегда начинается с курсом, равным курсу В КОНЦЕ предыдущей
+   * (`yaw + curvature*length`), поэтому стык между секциями больше не
+   * даёт видимого излома — раньше поворот случался МГНОВЕННО на границе
+   * (см. историю поля jointRadius и SectionChunk.buildJointPatch в
+   * истории репозитория), теперь он размазан по всей длине секции.
+   */
+  curvature: number;
   /** Выходные ворота на конце секции (см. GateSpec). */
   gates: GateSpec[];
   /** Длина средней стены-разделителя после развилки (0 — обычная секция). */
   partitionDepth: number;
-  /** Радиус диска-заплатки на стыке с предыдущей секцией (0 если стык прямой). */
-  jointRadius: number;
-  /** Параметры предыдущей секции для стыка-заплатки (см. SectionChunk.buildJointPatch). */
-  prevYaw: number;
+  /**
+   * Ширина и конец предыдущей секции — нужны только для бордюров-«ушей» на
+   * стыке разной ширины коридора (расширение входа 8→24, сужение на вилках
+   * развилки), см. SectionChunk.buildJointPatch.
+   */
   prevWidth: number;
-  prevColor: string;
   prevEnd: { x: number; z: number };
   /** Признак ветки развилки: A/B параллельные коридоры за двойными воротами. */
   forkBranch?: "a" | "b";
+  /**
+   * Тупиковый рукав: эта ветка развилки никуда не сходится — за ней нет
+   * выходных ворот (`gates` пуст), и барьер, ведущий в неё, НЕ односторонний
+   * (см. assignExitGates(..., oneWay)) — можно свободно вернуться и уйти
+   * через вторую дверь. Обычная секция или "настоящая" (проходная) ветка
+   * развилки — всегда false.
+   */
+  isDeadEnd?: boolean;
   /** Id ворот родительской секции, через которые входят в эту ветку. */
   forkGateId?: string;
   /** Индекс родительской секции (строить ветку, пока игрок у развилки или прошёл ворота). */
@@ -114,10 +133,22 @@ const MAX_BEND = 0.3;
 const MAX_YAW = 1.05;
 /** Вероятность, что секция закончится развилкой (двумя воротами). */
 const FORK_PROBABILITY = 0.45;
+/**
+ * Вероятность тупика — второй, независимой развилки-варианта, которая
+ * проверяется, только если "настоящая" развилка НЕ выпала (см. генератор):
+ * итоговый шанс СКРЕСТИТЬ какую-либо из двух дверей = FORK_PROBABILITY +
+ * DEADEND_PROBABILITY. Тупик выглядит снаружи как обычная развилка (те же
+ * двойные ворота), но одна из двух дверей ведёт в короткий рукав без выхода
+ * — открывшему её барьер не запирается за спиной (в отличие от настоящей
+ * развилки), можно спокойно вернуться и уйти через вторую дверь.
+ */
+const DEADEND_PROBABILITY = 0.2;
 /** Доля ширины коридора, которую закрывает один барьер при развилке. */
 const FORK_GATE_FRACTION = 0.5;
 /** Длина параллельных коридоров-веток за развилкой (до схождения в общую секцию). */
 const FORK_BRANCH_LENGTH = { min: 22, max: 38 };
+/** Длина тупикового рукава — заметно короче настоящей ветки: это бонусный уголок, а не часть пути. */
+export const DEADEND_LENGTH = { min: 12, max: 24 };
 
 const TIER_COLORS: Record<number, string> = {
   1: "#3f7d3a", // сочная трава — простые темы
@@ -150,6 +181,13 @@ function pick<T>(rng: () => number, arr: readonly T[]): T {
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
+/** Нормализация угла в (-π, π]. */
+function normAngle(a: number): number {
+  let r = a % (Math.PI * 2);
+  if (r > Math.PI) r -= Math.PI * 2;
+  if (r < -Math.PI) r += Math.PI * 2;
+  return r;
+}
 
 const BORDER_STYLES: readonly BorderStyle[] = ["bushes", "fence", "mountains"];
 const PRACTICE_KINDS: readonly PracticeTargetKind[] = ["tree", "dummy", "nettle"];
@@ -157,25 +195,51 @@ const PRACTICE_KINDS: readonly PracticeTargetKind[] = ["tree", "dummy", "nettle"
 /**
  * Уровень барьера: доля от ВСЕГО числа заклинаний, зависящая от сложности
  * секции (tier 1-3). С ростом контента (добавление школ) пороги масштабируются
- * сами — линейная треть на каждый тир.
+ * сами — tier/6 от общего числа тем (1/6, 1/3, 1/2 для tier 1/2/3).
  */
 function gateRequiredSpells(tier: number, totalSpells: number): number {
   return Math.max(1, Math.min(totalSpells, Math.ceil((totalSpells * tier) / 6)));
 }
 
-/** Перевод локальных координат секции (x — поперёк, z — вдоль) в мировые. */
-export function localToWorld(section: Pick<SectionSpec, "start" | "yaw">, localX: number, localZ: number): { x: number; z: number } {
-  const dirX = Math.sin(section.yaw);
-  const dirZ = Math.cos(section.yaw);
-  const perpX = Math.cos(section.yaw);
-  const perpZ = -Math.sin(section.yaw);
-  return {
-    x: section.start.x + localZ * dirX + localX * perpX,
-    z: section.start.z + localZ * dirZ + localX * perpZ,
-  };
+/** Курс (направление) оси секции в точке localZ вдоль её длины. */
+export function yawAt(section: Pick<SectionSpec, "yaw" | "curvature">, localZ: number): number {
+  return section.yaw + section.curvature * localZ;
 }
 
-/** Расстояние от точки до отрезка (для поиска секции по мировой позиции игрока). */
+/**
+ * Перевод локальных координат секции (x — поперёк, z — вдоль оси) в мировые.
+ * Секция — дуга ПОСТОЯННОЙ кривизны (curvature=0 — прямая, ровно как раньше):
+ * курс в точке localZ равен yawAt(section, localZ), позиция на осевой линии —
+ * замкнутая формула дуги окружности (интеграл (sin,cos)(yaw(s)) ds, s=0..localZ).
+ * localX откладывается ПЕРПЕНДИКУЛЯРНО оси именно В ТОЧКЕ localZ (локальный
+ * репер Френе), поэтому при curvature=0 формула даёт ТОЧНО то же самое, что
+ * и старая (проверено формально: dx/ds=sin(yaw(s)), dz/ds=cos(yaw(s)), и
+ * значение в s=0 равно start — см. verify_arc_math в истории ревью).
+ */
+export function localToWorld(
+  section: Pick<SectionSpec, "start" | "yaw" | "curvature">,
+  localX: number,
+  localZ: number
+): { x: number; z: number } {
+  const c = section.curvature;
+  const yaw0 = section.yaw;
+  let centerlineX: number;
+  let centerlineZ: number;
+  if (Math.abs(c) < 1e-9) {
+    centerlineX = section.start.x + localZ * Math.sin(yaw0);
+    centerlineZ = section.start.z + localZ * Math.cos(yaw0);
+  } else {
+    const yaw1 = yaw0 + c * localZ;
+    centerlineX = section.start.x + (Math.cos(yaw0) - Math.cos(yaw1)) / c;
+    centerlineZ = section.start.z + (Math.sin(yaw1) - Math.sin(yaw0)) / c;
+  }
+  const yawS = yawAt(section, localZ);
+  const perpX = Math.cos(yawS);
+  const perpZ = -Math.sin(yawS);
+  return { x: centerlineX + localX * perpX, z: centerlineZ + localX * perpZ };
+}
+
+/** Расстояние от точки до отрезка между двумя произвольными точками (для гейтов-барьеров — они всегда плоские, независимо от кривизны коридора — и для регрессионных тестов). */
 export function distPointToSegment(px: number, pz: number, ax: number, az: number, bx: number, bz: number): number {
   const dx = bx - ax;
   const dz = bz - az;
@@ -187,6 +251,45 @@ export function distPointToSegment(px: number, pz: number, ax: number, az: numbe
   const cx = ax + dx * t;
   const cz = az + dz * t;
   return Math.hypot(px - cx, pz - cz);
+}
+
+/**
+ * Расстояние от точки до ОСИ секции (дуги постоянной кривизны) — используется
+ * WorldStreamer.sectionAt() для определения секции игрока. Раньше секции были
+ * прямыми, и расстояние до хорды start-end (distPointToSegment) было точным;
+ * теперь ось может изгибаться вдоль своей длины, и расстояние до прямой хорды
+ * даёт систематическую ошибку в метры на длинных изогнутых секциях (стрела
+ * прогиба ~ length*|curvature|/8) — этого достаточно, чтобы спутать соседние
+ * секции у стыка, хотя SWITCH_HYSTERESIS в WorldStreamer рассчитан на куда
+ * меньший дребезг. Для прямых секций (curvature≈0) — эквивалентно старой
+ * формуле через distPointToSegment.
+ */
+export function distPointToSectionAxis(
+  px: number,
+  pz: number,
+  section: Pick<SectionSpec, "start" | "yaw" | "curvature" | "length">
+): number {
+  const { curvature, yaw: yaw0, length } = section;
+  if (Math.abs(curvature) < 1e-9) {
+    const end = localToWorld(section, 0, length);
+    return distPointToSegment(px, pz, section.start.x, section.start.z, end.x, end.z);
+  }
+  // Дуга — часть окружности радиуса 1/curvature с центром C; ближайшая точка
+  // ПОЛНОЙ окружности к P лежит строго в направлении C->P, поэтому достаточно
+  // найти угол этого направления (= курс дуги в искомой точке), перевести
+  // его в параметр s и обрезать в границы [0, length] (если ближайшая точка
+  // полной окружности вне дуги — ближайшая точка ДУГИ является одним из её
+  // концов, ровно то, что делает clamp).
+  const R = 1 / curvature;
+  const centerX = section.start.x + Math.cos(yaw0) * R;
+  const centerZ = section.start.z - Math.sin(yaw0) * R;
+  const vx = px - centerX;
+  const vz = pz - centerZ;
+  const yawAtNearest = Math.atan2(vz / R, -vx / R);
+  let s = normAngle(yawAtNearest - yaw0) / curvature;
+  s = clamp(s, 0, length);
+  const nearest = localToWorld(section, 0, s);
+  return Math.hypot(px - nearest.x, pz - nearest.z);
 }
 
 /**
@@ -214,13 +317,21 @@ function pickGateSchools(rng: () => number, gameState: GameState, used: Map<stri
   return chosen;
 }
 
-/** Назначает выходные ворота секции: forceFork=true — принудительно развилка. */
+/**
+ * Назначает выходные ворота секции: forceFork=true — принудительно развилка
+ * (двое ворот). oneWay управляет ТОЛЬКО односторонним блоком за барьерами
+ * развилки (см. EnergyGate) — сама раскладка (ширина, x=±w/4) не зависит от
+ * него. У настоящей развилки oneWay=true (закрепляет выбор школы); у
+ * развилки-тупика oneWay=false — ни одна из двух дверей не запирается,
+ * тупик задуман как свободно посещаемый бонус, а не выбор с последствиями.
+ */
 function assignExitGates(
   spec: SectionSpec,
   rng: () => number,
   gameState: GameState,
   used: Map<string, number>,
-  forceFork: boolean
+  forceFork: boolean,
+  oneWay: boolean = true
 ): void {
   const fork = forceFork;
   const schools = pickGateSchools(rng, gameState, used, fork ? 2 : 1);
@@ -229,11 +340,11 @@ function assignExitGates(
   if (fork) {
     const gateWidth = spec.width * FORK_GATE_FRACTION - 0.3;
     spec.gates = [
-      { id: `gate-${spec.index}-a`, requiredSpells: required, schoolId: schools[0], x: -spec.width / 4, width: gateWidth, fork: true },
-      { id: `gate-${spec.index}-b`, requiredSpells: required, schoolId: schools[1] ?? schools[0], x: spec.width / 4, width: gateWidth, fork: true },
+      { id: `gate-${spec.index}-a`, requiredSpells: required, schoolId: schools[0] ?? null, x: -spec.width / 4, width: gateWidth, fork: oneWay },
+      { id: `gate-${spec.index}-b`, requiredSpells: required, schoolId: schools[1] ?? schools[0] ?? null, x: spec.width / 4, width: gateWidth, fork: oneWay },
     ];
   } else {
-    spec.gates = [{ id: `gate-${spec.index}`, requiredSpells: required, schoolId: schools[0], x: 0, width: spec.width - 0.4 }];
+    spec.gates = [{ id: `gate-${spec.index}`, requiredSpells: required, schoolId: schools[0] ?? null, x: 0, width: spec.width - 0.4 }];
   }
 }
 
@@ -249,7 +360,9 @@ function assignExitGates(
  *   прокачки (школы); следующая секция делится средней стеной-разделителем.
  * - Тематика ворот = школа; выбирается по принципу «наименее отработанных»
  *   веток с анти-повтором внутри прогона.
- * - Стыки изогнутых секций закрываются дисками-заплатками (jointRadius).
+ * - Трасса изгибается ПЛАВНО: изгиб — не мгновенный поворот на стыке, а
+ *   постоянная кривизна вдоль всей длины секции (curvature) — соседние
+ *   секции всегда встречаются с равным курсом, без излома и без диска-заплатки.
  */
 export function generateWorld(gameState: GameState, seed: number = Date.now()): WorldSpec {
   const rng = mulberry32(seed);
@@ -263,15 +376,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   let prevSpec: SectionSpec | null = null;
   let witchCounter = 0;
 
-  /** Нормализация угла в [-π, π]. */
-  const normAngle = (a: number): number => {
-    let r = a % (Math.PI * 2);
-    if (r > Math.PI) r -= Math.PI * 2;
-    if (r < -Math.PI) r += Math.PI * 2;
-    return r;
-  };
-
-  /** Базовая секция (без сущностей); joint-параметры считаются по prev. */
+  /** Базовая секция (без сущностей). */
   const makeSection = (
     index: number,
     tier: number,
@@ -280,9 +385,9 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     start: { x: number; z: number },
     end: { x: number; z: number },
     sectionYaw: number,
+    curvature: number,
     prev: SectionSpec | null
   ): SectionSpec => {
-    const delta = prev ? Math.abs(normAngle(sectionYaw - prev.yaw)) : 0;
     return {
       index,
       tier,
@@ -293,13 +398,10 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       start,
       end,
       yaw: sectionYaw,
+      curvature,
       gates: [],
       partitionDepth: 0,
-      // Прямой стык (вилочные ветки, схождение) — клина нет; изгиб — клин.
-      jointRadius: prev && delta > 0.02 ? jointRadiusFor(prev, { yaw: sectionYaw, width }) : 0,
-      prevYaw: prev ? prev.yaw : 0,
       prevWidth: prev ? prev.width : 0,
-      prevColor: prev ? prev.color : "",
       prevEnd: prev ? { x: prev.end.x, z: prev.end.z } : { x: 0, z: 0 },
       witches: [],
       bonfires: [],
@@ -356,27 +458,47 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       : randRange(rng, SECTION_LENGTH.min, SECTION_LENGTH.max);
     const tier = Math.min(3, Math.floor((worldCount / mainSectionCount) * 3) + 1);
 
+    // Курс, с которым секция НАЧИНАЕТСЯ, — курс, на котором закончилась
+    // предыдущая (см. обновление `yaw` в конце итерации): стык без излома.
+    const startYaw = yaw;
+    let curvature = 0;
     if (!isFirst) {
-      // Изгиб трассы: случайный поворот, ограниченный потолком накопленного угла.
-      yaw = clamp(yaw + randRange(rng, -MAX_BEND, MAX_BEND), -MAX_YAW, MAX_YAW);
+      // Тот же случайный изгиб, что и раньше (тот же диапазон MAX_BEND и
+      // потолок MAX_YAW на итоговый курс) — но теперь размазанный ПОСТОЯННОЙ
+      // кривизной по всей длине секции, а не приложенный мгновенно на стыке.
+      // Секция становится дугой окружности вместо прямого отрезка — коридор
+      // поворачивает плавно, и дискового «клина»-заплатки на стыке (см.
+      // историю SectionChunk.buildJointPatch) больше не нужно: соседние
+      // секции всегда встречаются с РАВНЫМ курсом по построению.
+      const targetEndYaw = clamp(startYaw + randRange(rng, -MAX_BEND, MAX_BEND), -MAX_YAW, MAX_YAW);
+      curvature = (targetEndYaw - startYaw) / length;
     }
 
-    const end = localToWorld({ start: cursor, yaw }, 0, length);
-    const parent = makeSection(specIndex, tier, width, length, { x: cursor.x, z: cursor.z }, end, yaw, prevSpec);
+    const end = localToWorld({ start: cursor, yaw: startYaw, curvature }, 0, length);
+    const parent = makeSection(specIndex, tier, width, length, { x: cursor.x, z: cursor.z }, end, startYaw, curvature, prevSpec);
+    yaw = startYaw + curvature * length; // курс в конце секции = курс начала следующей
     fillSection(parent, isFirst);
 
     const forkAllowed =
       !isFirst &&
       !last &&
       gameState.getUnlockedSchools().filter((s) => getSpellsBySchool(s.id).length > 0).length >= 2;
-    const fork = forkAllowed && rng() < FORK_PROBABILITY;
+    // Один бросок на оба варианта: сперва зона настоящей развилки, затем
+    // (если не попали) зона тупика — суммарный шанс "что-то за двойными
+    // воротами" = FORK_PROBABILITY + DEADEND_PROBABILITY, без двух отдельных
+    // rng()-вызовов, чтобы не сбивать распределение остальных бросков.
+    const roll = forkAllowed ? rng() : 1;
+    const fork = roll < FORK_PROBABILITY;
+    const deadEnd = !fork && roll < FORK_PROBABILITY + DEADEND_PROBABILITY;
 
-    if (fork) {
-      assignExitGates(parent, rng, gameState, gateSchoolUsage, true);
+    if (fork || deadEnd) {
+      assignExitGates(parent, rng, gameState, gateSchoolUsage, true, !deadEnd);
 
       // --- Две ПАРАЛЛЕЛЬНЫЕ ветки за двойными воротами (см. ТЗ): каждая
-      // половинка коридора шириной w/2 идёт своим рукавом; концы обеих
-      // лежат на одной кромке — туда встык приходит общая секция J. ---
+      // половинка коридора шириной w/2 идёт своим рукавом. У настоящей
+      // развилки обе сходятся в J на одной кромке; у тупика — только ОДНА
+      // (случайно a или b) доходит до J, вторая — короткий рукав без выхода
+      // (см. isDeadEnd на SectionSpec). ---
       const branchLen = randRange(rng, FORK_BRANCH_LENGTH.min, FORK_BRANCH_LENGTH.max);
       const dirX = Math.sin(yaw);
       const dirZ = Math.cos(yaw);
@@ -384,6 +506,8 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       const perpZ = -Math.sin(yaw);
       const off = SECTION_WIDTH / 4;
       const branchTier = Math.min(3, tier + 1);
+      // Какая из двух дверей — тупик (если это вообще тупик, а не развилка).
+      const deadSlot: "a" | "b" | null = deadEnd ? (rng() < 0.5 ? "a" : "b") : null;
 
       // ВАЖНО: ветки и J начинаются у КОНЦА родителя (там, где стоят её
       // ворота — см. GateSpec/"Выходные ворота ... стоят на её КОНЦЕ"),
@@ -393,24 +517,46 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       // собственного коридора родителя (совпадающие/перекрывающиеся оси на
       // добрый десяток метров) — отсюда и «мир перестраивается под ногами»
       // возле развилок, и накладывающиеся полы/стены в этой зоне.
+      // Ветки и схождение остаются ПРЯМЫМИ (curvature=0): чтобы обе ветки
+      // реально были параллельны и сошлись в одну общую кромку J, их изгиб
+      // должен быть согласован (концентрические дуги с чуть разной кривизной
+      // для внутренней/внешней "полосы" — иначе расстояние между ними на
+      // длине branchLen "плывёт"). Отдельная, более тяжёлая задача — см.
+      // ревью; сама развилка от этого не выглядит хуже, чем раньше (стыки
+      // parent->ветки->J и без того были прямыми: yaw тут не менялся и в
+      // старой версии).
       const mkBranch = (branch: "a" | "b", sign: number, gateId: string): SectionSpec => {
+        const isDead = branch === deadSlot;
+        // Тупик короче настоящей ветки (это бонусный уголок, не часть пути)
+        // и не сложнее самой развилки (branchTier — только для проходных).
+        const branchLength = isDead ? randRange(rng, DEADEND_LENGTH.min, DEADEND_LENGTH.max) : branchLen;
+        const thisTier = isDead ? tier : branchTier;
         const start = { x: end.x - perpX * off * sign, z: end.z - perpZ * off * sign };
-        const branchEnd = { x: start.x + dirX * branchLen, z: start.z + dirZ * branchLen };
-        const spec = makeSection(specIndex + 1, branchTier, SECTION_WIDTH / 2, branchLen, start, branchEnd, yaw, parent);
+        const branchEnd = { x: start.x + dirX * branchLength, z: start.z + dirZ * branchLength };
+        const spec = makeSection(specIndex + 1, thisTier, SECTION_WIDTH / 2, branchLength, start, branchEnd, yaw, 0, parent);
         spec.forkBranch = branch;
         spec.forkGateId = gateId;
         spec.forkParentIndex = parent.index;
+        spec.isDeadEnd = isDead;
+        // Тупик остаётся без выходных ворот (spec.gates — [] по умолчанию из
+        // makeSection): дальше пути нет, только назад через тот же барьер
+        // (он не односторонний — см. assignExitGates(..., oneWay) выше).
         fillSection(spec, false);
         return spec;
       };
       const branchA = mkBranch("a", 1, parent.gates[0].id);
       const branchB = mkBranch("b", -1, parent.gates[1].id);
+      // J стыкуется с ПРОДОЛЖАЮЩЕЙ веткой — при настоящей развилке это
+      // произвольно branchA (обе ветки геометрически идентичны по ширине и
+      // курсу, для "ушей"-бордюра в SectionChunk неважно, какую взять); при
+      // тупике — обязательно та, что НЕ тупик (тупиковая до J не дотягивается).
+      const continuingBranch = deadSlot === "a" ? branchB : branchA;
 
-      // Общая секция-схождение: вход J — одна кромка с концами обеих веток.
+      // Общая секция-схождение: вход J — кромка на конце ПРОДОЛЖАЮЩЕЙ ветки.
       const jStart = { x: end.x + dirX * branchLen, z: end.z + dirZ * branchLen };
       const jLength = randRange(rng, SECTION_LENGTH.min, SECTION_LENGTH.max);
-      const jEnd = localToWorld({ start: jStart, yaw }, 0, jLength);
-      const join = makeSection(specIndex + 2, tier, SECTION_WIDTH, jLength, jStart, jEnd, yaw, branchA);
+      const jEnd = localToWorld({ start: jStart, yaw, curvature: 0 }, 0, jLength);
+      const join = makeSection(specIndex + 2, tier, SECTION_WIDTH, jLength, jStart, jEnd, yaw, 0, continuingBranch);
       fillSection(join, false);
 
       sections.push(parent, branchA, branchB, join);
@@ -429,10 +575,16 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   }
 
   // --- Финальная секция — спокойный подход к башне, без врагов, без выхода ---
-  yaw = clamp(yaw + randRange(rng, -MAX_BEND, MAX_BEND), -MAX_YAW, MAX_YAW);
+  const approachStartYaw = yaw;
+  const approachTargetEndYaw = clamp(approachStartYaw + randRange(rng, -MAX_BEND, MAX_BEND), -MAX_YAW, MAX_YAW);
   const approachLength = randRange(rng, SECTION_LENGTH.min, SECTION_LENGTH.max);
+  const approachCurvature = (approachTargetEndYaw - approachStartYaw) / approachLength;
   const approachStart = { x: cursor.x, z: cursor.z };
-  const approachEnd = localToWorld({ start: approachStart, yaw }, 0, approachLength);
+  const approachEnd = localToWorld(
+    { start: approachStart, yaw: approachStartYaw, curvature: approachCurvature },
+    0,
+    approachLength
+  );
   if (prevSpec) {
     // Вход в подход гейтится одиночным барьером от последней боевой секции.
     const schools = pickGateSchools(rng, gameState, gateSchoolUsage, 1);
@@ -440,13 +592,23 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       {
         id: "gate-approach",
         requiredSpells: gateRequiredSpells(prevSpec.tier, ALL_SPELLS.length),
-        schoolId: schools[0],
+        schoolId: schools[0] ?? null,
         x: 0,
         width: prevSpec.width - 0.4,
       },
     ];
   }
-  const approach = makeSection(specIndex, 0, SECTION_WIDTH, approachLength, approachStart, approachEnd, yaw, prevSpec);
+  const approach = makeSection(
+    specIndex,
+    0,
+    SECTION_WIDTH,
+    approachLength,
+    approachStart,
+    approachEnd,
+    approachStartYaw,
+    approachCurvature,
+    prevSpec
+  );
   approach.color = APPROACH_COLOR;
   approach.witches = [];
   approach.bonfires = [];
@@ -490,17 +652,11 @@ function logWorldSpec(world: WorldSpec, seed: number): void {
       .join(" | ");
     // eslint-disable-next-line no-console
     console.log(
-      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"} partitionDepth=${s.partitionDepth.toFixed(2)} jointRadius=${s.jointRadius.toFixed(2)} gates=[${gates || "-"}]`
+      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}]`
     );
   }
   // eslint-disable-next-line no-console
   console.groupEnd();
-}
-
-/** Радиус диска-заплатки, закрывающего зазор между двумя изогнутыми секциями. */
-function jointRadiusFor(prev: SectionSpec, cur: { yaw: number; width: number }): number {
-  const diff = Math.abs(cur.yaw - prev.yaw) / 2;
-  return Math.max(prev.width, cur.width) / 2 / Math.cos(diff) + 0.6;
 }
 
 /**

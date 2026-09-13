@@ -17,7 +17,21 @@ export class FogManager {
   private static readonly FADE_SPEED = 2.5; // 1/с
 
   private readonly mat: StandardMaterial;
-  private readonly entries: { planes: Mesh[]; visibility: number }[] = [];
+  /**
+   * Стены тумана, сгруппированные по spec.index, а НЕ по позиции в
+   * world.sections. Окно стриминга, frontier и видимость веток в
+   * WorldStreamer считаются по spec.index; после каждой развилки эти два
+   * способа нумерации расходятся (ветки A/B делят один index, схождение J
+   * получает index+1, а массив sections при этом растёт на 4 позиции —
+   * см. WorldStreamer.sectionAt). Старая индексация `entries[i]` (i — номер
+   * секции в массиве) на любом мире с развилкой подставляла стену тумана не
+   * на ту секцию — обычно на одну из веток развилки вместо реального
+   * frontier, что не покрывалось тестами (test-world-streamer.ts проверяет
+   * fog только рядом со спавном, ДО первой развилки).
+   * Ключ — spec.index; значение — список стен (длиннее 1, если ветки
+   * развилки делят этот index).
+   */
+  private readonly entriesByIndex = new Map<number, { planes: Mesh[]; visibility: number }[]>();
   private lastFrontier = -2;
   private settled = true;
 
@@ -60,7 +74,9 @@ export class FogManager {
         };
         planes.push(plane);
       }
-      this.entries.push({ planes, visibility: 0 });
+      const list = this.entriesByIndex.get(section.index) ?? [];
+      list.push({ planes, visibility: 0 });
+      this.entriesByIndex.set(section.index, list);
     }
   }
 
@@ -83,32 +99,33 @@ export class FogManager {
 
     const k = Math.min(1, deltaSeconds * FogManager.FADE_SPEED);
     let settled = true;
-    for (let i = 0; i < this.entries.length; i++) {
-      const target = i === frontierIndex ? 1 : 0;
-      const e = this.entries[i];
-      const prevVisible = e.visibility > 0.01;
-      const v = target > e.visibility ? Math.min(target, e.visibility + k) : Math.max(target, e.visibility - k);
-      if (Math.abs(v - target) > 0.005) settled = false;
-      e.visibility = v;
-      const visible = v > 0.01;
-      for (const plane of e.planes) {
-        plane.visibility = visible ? v : 0;
-        if (plane.isVisible !== visible) {
-          plane.isVisible = visible;
-          // Пишем только момент появления/исчезновения — иначе заспамит
-          // каждый кадр (FADE_SPEED=2.5, при резкой смене видимости).
-          if (visible) {
-            const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
-            // eslint-disable-next-line no-console
-            console.log(
-              `[fog] +plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
-            );
-          } else if (prevVisible) {
-            const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
-            // eslint-disable-next-line no-console
-            console.log(
-              `[fog] -plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
-            );
+    for (const [index, list] of this.entriesByIndex) {
+      const target = index === frontierIndex ? 1 : 0;
+      for (const e of list) {
+        const prevVisible = e.visibility > 0.01;
+        const v = target > e.visibility ? Math.min(target, e.visibility + k) : Math.max(target, e.visibility - k);
+        if (Math.abs(v - target) > 0.005) settled = false;
+        e.visibility = v;
+        const visible = v > 0.01;
+        for (const plane of e.planes) {
+          plane.visibility = visible ? v : 0;
+          if (plane.isVisible !== visible) {
+            plane.isVisible = visible;
+            // Пишем только момент появления/исчезновения — иначе заспамит
+            // каждый кадр (FADE_SPEED=2.5, при резкой смене видимости).
+            if (visible) {
+              const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
+              // eslint-disable-next-line no-console
+              console.log(
+                `[fog] +plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
+              );
+            } else if (prevVisible) {
+              const meta = plane.metadata as { sectionIndex: number; planeIndex: number } | null;
+              // eslint-disable-next-line no-console
+              console.log(
+                `[fog] -plane section=${meta?.sectionIndex ?? "?"}#${meta?.planeIndex ?? "?"} vis=${v.toFixed(2)}`
+              );
+            }
           }
         }
       }
@@ -118,15 +135,17 @@ export class FogManager {
 
   /** Видима ли стена тумана секции (для тестов и отладки). */
   public isWallActive(index: number): boolean {
-    const e = this.entries[index];
-    return !!e && e.visibility > 0.5;
+    const list = this.entriesByIndex.get(index);
+    return !!list && list.some((e) => e.visibility > 0.5);
   }
 
   public dispose(): void {
-    for (const e of this.entries) {
-      for (const plane of e.planes) plane.dispose();
+    for (const list of this.entriesByIndex.values()) {
+      for (const e of list) {
+        for (const plane of e.planes) plane.dispose();
+      }
     }
-    this.entries.length = 0;
+    this.entriesByIndex.clear();
     this.mat.dispose();
   }
 }

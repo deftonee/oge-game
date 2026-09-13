@@ -2,8 +2,10 @@ import {
   generateWorld,
   localToWorld,
   distPointToSegment,
+  yawAt,
   FIRST_SECTION_WIDTH,
   SECTION_WIDTH,
+  DEADEND_LENGTH,
 } from "../src/world/WorldGenerator";
 import { GameState } from "../src/core/GameState";
 
@@ -18,6 +20,7 @@ function check(cond: boolean, msg: string): void {
 }
 
 let totalForks = 0;
+let totalDeadEnds = 0;
 
 for (let seed = 1; seed <= 200; seed++) {
   const gameState = new GameState();
@@ -41,17 +44,39 @@ for (let seed = 1; seed <= 200; seed++) {
       check(s.witches.length === 0, `seed ${seed}: в первой секции не должно быть ведьм`);
       check(s.gates.length === 1, `seed ${seed}: вход в игру — одиночный барьер`);
       check(!s.forkBranch, `seed ${seed}: первая секция не ветка`);
+      check(s.curvature === 0, `seed ${seed}: первая секция (мягкий онбординг) должна быть прямой`);
     } else if (isBranch) {
-      // Параллельный коридор-ветка развилки
+      // Параллельный коридор-ветка развилки (проходная ИЛИ тупиковая)
       check(s.width === SECTION_WIDTH / 2, `seed ${seed}: ширина ветки = половина коридора (${s.width})`);
-      check(s.length >= 22 && s.length <= 38, `seed ${seed}: длина ветки вне диапазона (${s.length.toFixed(1)})`);
-      check(s.gates.length === 0, `seed ${seed}: ветка заканчивается свободным входом в схождение`);
+      if (s.isDeadEnd) {
+        check(
+          s.length >= DEADEND_LENGTH.min && s.length <= DEADEND_LENGTH.max,
+          `seed ${seed}: длина тупика вне диапазона (${s.length.toFixed(1)})`
+        );
+        check(s.gates.length === 0, `seed ${seed}: тупик не должен иметь выходных ворот`);
+      } else {
+        check(s.length >= 22 && s.length <= 38, `seed ${seed}: длина ветки вне диапазона (${s.length.toFixed(1)})`);
+        check(s.gates.length === 0, `seed ${seed}: ветка заканчивается свободным входом в схождение`);
+      }
       check(!!s.forkGateId && s.forkParentIndex !== undefined, `seed ${seed}: ветка без привязки к воротам`);
-      check(s.jointRadius === 0, `seed ${seed}: стык ветки прямой, клина быть не должно`);
+      check(s.curvature === 0, `seed ${seed}: ветка развилки должна быть прямой (curvature=0)`);
     } else if (!isApproach) {
       // Обычная стволовая секция или схождение J
       check(s.width === SECTION_WIDTH, `seed ${seed}: обычная секция должна быть 3× ширины (${s.width})`);
       check(s.length >= 36 && s.length <= 54, `seed ${seed}: длина обычной секции вне диапазона (${s.length.toFixed(1)})`);
+      if (isJoin) check(s.curvature === 0, `seed ${seed}: схождение J должно быть прямым (curvature=0)`);
+    }
+
+    // --- Дуга внутренне согласована: сохранённый end обязан совпасть с
+    // формулой localToWorld(start, yaw, curvature, length) — иначе любой
+    // потребитель (пол/стены/фог/стример), читающий end напрямую, разойдётся
+    // с тем, что реально рисует ось секции. ---
+    {
+      const computedEnd = localToWorld(s, 0, s.length);
+      check(
+        Math.hypot(s.end.x - computedEnd.x, s.end.z - computedEnd.z) < 1e-6,
+        `seed ${seed}: сохранённый end секции ${s.index} не совпадает с формулой дуги`
+      );
     }
 
     // --- Сущности в локальных границах ---
@@ -71,7 +96,17 @@ for (let seed = 1; seed <= 200; seed++) {
     } else if (s.gates.length === 2) {
       totalForks++;
       const [ga, gb] = s.gates;
-      check(ga.fork === true && gb.fork === true, `seed ${seed}: ворота развилки должны быть односторонними`);
+      const junctionBranches = sections.filter((o) => o.forkBranch && o.forkParentIndex === s.index);
+      const hasDeadEnd = junctionBranches.some((o) => o.isDeadEnd);
+      if (hasDeadEnd) {
+        totalDeadEnds++;
+        check(
+          ga.fork !== true && gb.fork !== true,
+          `seed ${seed}: у развилки-тупика барьеры не должны быть односторонними (можно вернуться)`
+        );
+      } else {
+        check(ga.fork === true && gb.fork === true, `seed ${seed}: ворота настоящей развилки должны быть односторонними`);
+      }
       check(ga.schoolId !== gb.schoolId, `seed ${seed}: два барьера развилки — разные школы`);
       check(Math.abs(Math.abs(ga.x) - s.width / 4) < 1e-9 && Math.abs(Math.abs(gb.x) - s.width / 4) < 1e-9, `seed ${seed}: x барьеров = ±w/4`);
       check(Math.abs(ga.width - (s.width / 2 - 0.3)) < 1e-9, `seed ${seed}: ширина барьера = половина коридора`);
@@ -91,9 +126,15 @@ for (let seed = 1; seed <= 200; seed++) {
           `seed ${seed}: ветки привязаны не к своим воротам (${a.forkGateId}, ${b.forkGateId})`
         );
         check(a.index === s.index + 1 && b.index === s.index + 1, `seed ${seed}: индекс ветки != parent+1`);
+        const parentEndYaw = yawAt(s, s.length);
         check(
-          Math.abs(a.yaw - s.yaw) < 1e-9 && Math.abs(b.yaw - s.yaw) < 1e-9,
-          `seed ${seed}: ветки не параллельны родителю`
+          Math.abs(a.yaw - parentEndYaw) < 1e-9 && Math.abs(b.yaw - parentEndYaw) < 1e-9,
+          `seed ${seed}: ветки не продолжают курс родителя на его конце`
+        );
+        check(a.curvature === 0 && b.curvature === 0, `seed ${seed}: ветки должны быть прямыми (curvature=0)`);
+        check(
+          !(a.isDeadEnd && b.isDeadEnd),
+          `seed ${seed}: у развилки ${s.index} обе ветки тупиковые — тогда дальше пути вообще нет`
         );
       }
       const join = sections.find((o) => !o.forkBranch && o.index === s.index + 2);
@@ -108,6 +149,13 @@ for (let seed = 1; seed <= 200; seed++) {
           Math.hypot(s.start.x - prev.end.x, s.start.z - prev.end.z) < 1e-6,
           `seed ${seed}: разрыв стыка секций ${prev.index}->${s.index}`
         );
+        // Новый инвариант кривизны: курс НАЧАЛА текущей секции обязан РОВНО
+        // совпасть с курсом КОНЦА предыдущей — иначе на стыке снова появится
+        // видимый излом (то, ради чего вся эта переделка и затевалась).
+        check(
+          Math.abs(s.yaw - yawAt(prev, prev.length)) < 1e-9,
+          `seed ${seed}: излом курса на стыке ${prev.index}->${s.index} (нет непрерывности касательной)`
+        );
       }
       if (isJoin) {
         // Схождение: концы ОБЕИХ веток лежат на входной кромке J
@@ -117,27 +165,37 @@ for (let seed = 1; seed <= 200; seed++) {
         const a = { x: s.start.x - perpX * half, z: s.start.z - perpZ * half };
         const b = { x: s.start.x + perpX * half, z: s.start.z + perpZ * half };
         const prevPrev = sections[i - 2];
-        check(
-          distPointToSegment(prev.end.x, prev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
-          `seed ${seed}: конец ветки B не на кромке J`
-        );
-        check(
-          distPointToSegment(prevPrev.end.x, prevPrev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
-          `seed ${seed}: конец ветки A не на кромке J`
-        );
+        // Тупиковая ветка НЕ обязана доставать до кромки J — в этом и есть
+        // весь смысл тупика (см. isDeadEnd). Проверяем только ту ветку(-и),
+        // что реально продолжается в J.
+        if (!prev.isDeadEnd) {
+          check(
+            distPointToSegment(prev.end.x, prev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
+            `seed ${seed}: конец ветки B не на кромке J`
+          );
+        }
+        if (!prevPrev.isDeadEnd) {
+          check(
+            distPointToSegment(prevPrev.end.x, prevPrev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
+            `seed ${seed}: конец ветки A не на кромке J`
+          );
+        }
 
         // Регрессия: J тоже не должно накладываться на коридор родителя.
         // sections.push(parent, branchA, branchB, join) кладёт их подряд,
-        // поэтому родитель — три позиции назад от join.
+        // поэтому родитель — три позиции назад от join. Проецируем на курс
+        // родителя В ЕГО КОНЦЕ (а не в начале — теперь родитель сам может
+        // изгибаться по своей длине, так что курс начала и конца отличаются).
         const parent = sections[i - 3];
         if (parent && parent.gates.length === 2) {
-          const dirX = Math.sin(parent.yaw);
-          const dirZ = Math.cos(parent.yaw);
-          const projJoinStart = (s.start.x - parent.start.x) * dirX + (s.start.z - parent.start.z) * dirZ;
+          const parentEndYaw = yawAt(parent, parent.length);
+          const dirX = Math.sin(parentEndYaw);
+          const dirZ = Math.cos(parentEndYaw);
+          const projPastEnd = (s.start.x - parent.end.x) * dirX + (s.start.z - parent.end.z) * dirZ;
           check(
-            projJoinStart >= parent.length - 1e-6,
+            projPastEnd >= -1e-6,
             `seed ${seed}: схождение ${s.index} накладывается на коридор родителя ${parent.index} ` +
-              `(J начинается на ${projJoinStart.toFixed(1)} по оси родителя, а сам родитель кончается на ${parent.length.toFixed(1)})`
+              `(J не впереди конца родителя по его курсу, проекция ${projPastEnd.toFixed(1)})`
           );
         }
       }
@@ -158,20 +216,22 @@ for (let seed = 1; seed <= 200; seed++) {
       }
 
       // Регрессия: ветка обязана НАЧИНАТЬСЯ у КОНЦА родителя (где стоят её
-      // ворота), а не поверх его собственного коридора. Проецируем начало
-      // ветки на ось родителя (родитель и ветка всегда сонаправлены) —
-      // проекция должна совпасть с parent.length. Если вместо этого ветка
-      // строилась от НАЧАЛА родителя (баг), проекция окажется ≈0, и это
-      // всплывёт здесь.
+      // ворота), а не поверх его собственного коридора. Раньше это ловилось
+      // проекцией на ось родителя (совпадала с parent.length) — но родитель
+      // теперь сам может изгибаться по своей длине, и проекция через
+      // константный курс НАЧАЛА родителя перестаёт быть точной мерой
+      // "пройденного расстояния" вдоль дуги. Проверяем вместо этого напрямую
+      // (не зависит от кривизны): начало ветки лежит РОВНО в SECTION_WIDTH/4
+      // от КОНЦА родителя (её боковое смещение при построении) — а не где-то
+      // в районе parent.length от его начала, как было бы при баге со стартом
+      // от cursor вместо end.
       const parent = sections.find((o) => o.index === s.forkParentIndex);
       if (parent) {
-        const dirX = Math.sin(parent.yaw);
-        const dirZ = Math.cos(parent.yaw);
-        const proj = (s.start.x - parent.start.x) * dirX + (s.start.z - parent.start.z) * dirZ;
+        const distFromParentEnd = Math.hypot(s.start.x - parent.end.x, s.start.z - parent.end.z);
         check(
-          Math.abs(proj - parent.length) < 1e-6,
+          Math.abs(distFromParentEnd - SECTION_WIDTH / 4) < 1e-6,
           `seed ${seed}: ветка ${s.index} накладывается на коридор родителя ${parent.index} ` +
-            `(начало ветки проецируется на ${proj.toFixed(1)} по оси родителя вместо ${parent.length.toFixed(1)})`
+            `(начало ветки в ${distFromParentEnd.toFixed(1)} м от конца родителя вместо ${(SECTION_WIDTH / 4).toFixed(1)})`
         );
       }
     }
@@ -212,8 +272,9 @@ for (let seed = 1; seed <= 200; seed++) {
 }
 
 check(totalForks >= 40, `развилки должны иногда встречаться (на 200 сидах видели ${totalForks})`);
+check(totalDeadEnds >= 10, `тупики должны иногда встречаться (на 200 сидах видели ${totalDeadEnds} из ${totalForks} развилок-вариантов)`);
 
-console.log(`Проверок: ${checks}, провалов: ${failures}, развилок на 200 сидах: ${totalForks}`);
+console.log(`Проверок: ${checks}, провалов: ${failures}, развилок на 200 сидах: ${totalForks} (из них тупиков: ${totalDeadEnds})`);
 if (failures > 0) {
   console.error("FAILED: инварианты генерации мира нарушены");
   process.exit(1);
