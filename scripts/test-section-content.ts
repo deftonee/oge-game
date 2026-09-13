@@ -45,6 +45,7 @@ function makeSpec(index: number, tier = 2, length = 40, width = 24): SectionSpec
     bonfires: [],
     practiceTargets: [],
     chests: [],
+    sideSpurs: [],
     grass: [],
     borderLeft: [],
     borderRight: [],

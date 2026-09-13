@@ -101,6 +101,26 @@ export class SectionContentBuilder {
     };
   }
 
+  /**
+   * Содержимое перпендикулярной боковой ниши (см. WorldGenerator.SideSpurSpec):
+   * ОДНА тема для охраняющей ведьмы (та же логика взвешивания по слабости
+   * игрока, что и у обычных ведьм секции) + ОДНА группа не собранных страниц
+   * книги для сундука. Возвращает `null`, если нишу нечем наполнить —
+   * школы этого tier заперты (некому атаковать) или весь лор уже собран
+   * (нечем награждать); в этом случае ниша в мире не появляется.
+   */
+  public buildSideSpurContent(tier: number): { spellId: string; book: { bookId: string; pageIds: string[] } } | null {
+    const pool = ALL_SPELLS.filter((s) => s.tier <= tier && this.gameState.isSchoolUnlocked(s.school));
+    if (pool.length === 0) return null;
+
+    const groups = uncollectedPageGroups(this.gameState);
+    if (groups.length === 0) return null;
+
+    const spellId = pickWeightedByWeakness(this.rng, pool, this.gameState).id;
+    const group = pick(this.rng, groups);
+    return { spellId, book: { bookId: group.bookId, pageIds: [...group.pageIds] } };
+  }
+
   /** Применяет правило к секции, заполняя её массивы сущностей и декора. */
   public apply(spec: SectionSpec, rule: SectionContentRule): void {
     const merged: SectionContentRule = {

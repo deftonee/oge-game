@@ -6,6 +6,9 @@ import {
   FIRST_SECTION_WIDTH,
   SECTION_WIDTH,
   DEADEND_LENGTH,
+  SIDE_SPUR_WIDTH,
+  SIDE_SPUR_LENGTH,
+  SIDE_SPUR_MARGIN,
 } from "../src/world/WorldGenerator";
 import { GameState } from "../src/core/GameState";
 
@@ -21,6 +24,7 @@ function check(cond: boolean, msg: string): void {
 
 let totalForks = 0;
 let totalDeadEnds = 0;
+let totalSideSpurs = 0;
 
 for (let seed = 1; seed <= 200; seed++) {
   const gameState = new GameState();
@@ -86,6 +90,59 @@ for (let seed = 1; seed <= 200; seed++) {
     for (const b of s.bonfires) check(b.z > 0 && b.z < s.length, `seed ${seed}: костёр вне секции`);
     for (const p of s.practiceTargets) {
       check(p.z > 0 && p.z < s.length && Math.abs(p.x) <= s.width / 2 - 1, `seed ${seed}: цель вне границ`);
+    }
+
+    // --- Боковые ниши-тупики (SideSpurSpec): самостоятельная перпендикулярная
+    // геометрия, а не приклеенная к телу секции. ---
+    if (s.sideSpurs.length > 0) {
+      totalSideSpurs += s.sideSpurs.length;
+      check(
+        s.index !== 0 && !isApproach && !isBranch,
+        `seed ${seed}: ниша не должна появляться на первой/подходной секции или ветке развилки (секция ${s.index})`
+      );
+      for (const spur of s.sideSpurs) {
+        check(spur.width === SIDE_SPUR_WIDTH, `seed ${seed}: ширина ниши ${spur.width} != ${SIDE_SPUR_WIDTH}`);
+        check(
+          spur.length >= SIDE_SPUR_LENGTH.min && spur.length <= SIDE_SPUR_LENGTH.max,
+          `seed ${seed}: длина ниши вне диапазона (${spur.length.toFixed(1)})`
+        );
+        check(
+          spur.doorZ >= SIDE_SPUR_MARGIN - 1e-6 && spur.doorZ <= s.length - SIDE_SPUR_MARGIN + 1e-6,
+          `seed ${seed}: проём ниши слишком близко к концу секции (z=${spur.doorZ.toFixed(1)} из ${s.length.toFixed(1)})`
+        );
+
+        // Перпендикулярность: курс ниши = курс родителя в точке проёма ± 90°.
+        // Курс всей трассы ограничен MAX_YAW (±1.05 рад) — обёртка угла через
+        // (-π, π] тут не нужна, ±π/2 от него никогда не переваливает за π.
+        const parentYawAtDoor = yawAt(s, spur.doorZ);
+        const diff = Math.abs(spur.yaw - parentYawAtDoor);
+        check(
+          Math.abs(diff - Math.PI / 2) < 1e-9,
+          `seed ${seed}: ниша должна отходить СТРОГО перпендикулярно (разница курса ${diff.toFixed(3)} рад)`
+        );
+
+        // Проём геометрически лежит на стене родителя в точке doorZ.
+        const doorX = spur.side === "right" ? s.width / 2 : -s.width / 2;
+        const expectedStart = localToWorld(s, doorX, spur.doorZ);
+        check(
+          Math.hypot(spur.start.x - expectedStart.x, spur.start.z - expectedStart.z) < 1e-6,
+          `seed ${seed}: проём ниши не на стене родителя в заявленной точке`
+        );
+
+        // Ведьма и сундук — в границах РУКАВА ниши (собственная система координат).
+        check(
+          spur.witch.z > 0 && spur.witch.z < spur.length && Math.abs(spur.witch.x) <= spur.width / 2,
+          `seed ${seed}: ведьма ниши вне границ рукава`
+        );
+        check(
+          spur.chest.z > 0 && spur.chest.z < spur.length && Math.abs(spur.chest.x) <= spur.width / 2,
+          `seed ${seed}: сундук ниши вне границ рукава`
+        );
+        check(
+          spur.chest.bookIds.length + spur.chest.pageIds.length > 0,
+          `seed ${seed}: сундук ниши без содержимого`
+        );
+      }
     }
 
     // --- Ворота ---
@@ -265,16 +322,21 @@ for (let seed = 1; seed <= 200; seed++) {
   }
 
   // --- Уникальность id ---
-  const allWitchIds = sections.flatMap((s) => s.witches.map((w) => w.id));
+  const allWitchIds = sections.flatMap((s) => [...s.witches.map((w) => w.id), ...s.sideSpurs.map((sp) => sp.witch.id)]);
   check(new Set(allWitchIds).size === allWitchIds.length, `seed ${seed}: дубли id ведьм`);
+  const allChestIds = sections.flatMap((s) => [...s.chests.map((c) => c.id), ...s.sideSpurs.map((sp) => sp.chest.id)]);
+  check(new Set(allChestIds).size === allChestIds.length, `seed ${seed}: дубли id сундуков`);
   const gateIds = sections.flatMap((s) => s.gates.map((g) => g.id));
   check(new Set(gateIds).size === gateIds.length, `seed ${seed}: дубли id ворот`);
 }
 
 check(totalForks >= 40, `развилки должны иногда встречаться (на 200 сидах видели ${totalForks})`);
 check(totalDeadEnds >= 10, `тупики должны иногда встречаться (на 200 сидах видели ${totalDeadEnds} из ${totalForks} развилок-вариантов)`);
+check(totalSideSpurs >= 30, `боковые ниши должны иногда встречаться (на 200 сидах видели ${totalSideSpurs})`);
 
-console.log(`Проверок: ${checks}, провалов: ${failures}, развилок на 200 сидах: ${totalForks} (из них тупиков: ${totalDeadEnds})`);
+console.log(
+  `Проверок: ${checks}, провалов: ${failures}, развилок на 200 сидах: ${totalForks} (из них тупиков: ${totalDeadEnds}), боковых ниш: ${totalSideSpurs}`
+);
 if (failures > 0) {
   console.error("FAILED: инварианты генерации мира нарушены");
   process.exit(1);

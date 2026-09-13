@@ -1,5 +1,5 @@
 import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
-import { SectionSpec, ScatterSeed, BorderStyle, localToWorld, yawAt } from "./WorldGenerator";
+import { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec, localToWorld, yawAt } from "./WorldGenerator";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
@@ -88,6 +88,7 @@ export class SectionChunk {
     this.buildWalls(wallMat);
     this.buildPartition(wallMat);
     this.buildJointPatch();
+    this.buildSideSpursEnvironment(wallMat);
     this.buildScatter(this.spec.grass, "grass");
     this.buildBorder(this.spec.borderLeft);
     this.buildBorder(this.spec.borderRight);
@@ -122,14 +123,50 @@ export class SectionChunk {
    * прямоугольник/бокс, а лента (ribbon), повторяющая изгиб секции.
    */
   private curvePath(localX: number, y: number): Vector3[] {
-    const steps = this.curveSteps();
+    return this.curvePathRange(localX, y, 0, this.spec.length);
+  }
+
+  /**
+   * То же, что curvePath, но только для ПОДОТРЕЗКА [zStart, zEnd] длины
+   * секции — нужно, чтобы вырезать проём в стене под боковую нишу (см.
+   * wallSegments/buildWalls): проём делит одну сплошную ленту-стену на
+   * несколько отдельных лент, каждая строится по своему подотрезку.
+   */
+  private curvePathRange(localX: number, y: number, zStart: number, zEnd: number): Vector3[] {
+    const segLen = zEnd - zStart;
+    if (segLen <= 0) return [];
+    const steps = Math.max(1, Math.round(segLen / SectionChunk.CURVE_SEGMENT_LENGTH));
     const points: Vector3[] = [];
     for (let i = 0; i <= steps; i++) {
-      const z = (this.spec.length * i) / steps;
+      const z = zStart + (segLen * i) / steps;
       const p = this.toWorld(localX, z);
       points.push(new Vector3(p.x, y, p.z));
     }
     return points;
+  }
+
+  /**
+   * Отрезки [start, end] (локальные z), которые реально нужно застроить
+   * стеной с заданной стороны — весь [0, length] МИНУС проёмы под боковые
+   * ниши (SideSpurSpec.doorZ ± width/2) этой же стороны. Без ниш — один
+   * сплошной отрезок [0, length], как и раньше (поведение не меняется).
+   */
+  private wallSegments(side: "left" | "right"): { start: number; end: number }[] {
+    const length = this.spec.length;
+    const gaps = this.spec.sideSpurs
+      .filter((s) => s.side === side)
+      .map((s) => ({ start: Math.max(0, s.doorZ - s.width / 2), end: Math.min(length, s.doorZ + s.width / 2) }))
+      .filter((g) => g.end > g.start)
+      .sort((a, b) => a.start - b.start);
+
+    const segments: { start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const gap of gaps) {
+      if (gap.start > cursor + 0.05) segments.push({ start: cursor, end: gap.start });
+      cursor = Math.max(cursor, gap.end);
+    }
+    if (length - cursor > 0.05) segments.push({ start: cursor, end: length });
+    return segments;
   }
 
   private buildFloor(): void {
@@ -153,23 +190,33 @@ export class SectionChunk {
     // обе стены одной формы). На дуге левая и правая стена — РАЗНЫЕ кривые
     // (внутренняя/внешняя сторона поворота, разный эффективный радиус),
     // клонировать нечего — строим ленту для каждой отдельно.
-    const left = MeshBuilder.CreateRibbon(
-      `wallL_${this.spec.index}`,
-      { pathArray: [this.curvePath(-half, 0), this.curvePath(-half, h)], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    left.material = wallMat;
-    left.checkCollisions = true;
+    //
+    // Если у секции есть боковые ниши (SideSpurSpec) с этой стороны — стена
+    // строится НЕСКОЛЬКИМИ лентами по wallSegments(), с разрывом-проёмом на
+    // месте каждой ниши, а не одной сплошной лентой на всю длину. Без ниш
+    // wallSegments() возвращает один отрезок [0, length] — ровно как раньше.
+    const buildSide = (localX: number, side: "left" | "right", tag: string) => {
+      const segments = this.wallSegments(side);
+      segments.forEach((seg, i) => {
+        const wall = MeshBuilder.CreateRibbon(
+          `wall${tag}_${this.spec.index}_${i}`,
+          {
+            pathArray: [
+              this.curvePathRange(localX, 0, seg.start, seg.end),
+              this.curvePathRange(localX, h, seg.start, seg.end),
+            ],
+            sideOrientation: Mesh.DOUBLESIDE,
+          },
+          this.scene
+        );
+        wall.material = wallMat;
+        wall.checkCollisions = true;
+        this.disposables.push(wall);
+      });
+    };
 
-    const right = MeshBuilder.CreateRibbon(
-      `wallR_${this.spec.index}`,
-      { pathArray: [this.curvePath(half, 0), this.curvePath(half, h)], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    right.material = wallMat;
-    right.checkCollisions = true;
-
-    this.disposables.push(left, right);
+    buildSide(-half, "left", "L");
+    buildSide(half, "right", "R");
   }
 
   /**
@@ -265,6 +312,69 @@ export class SectionChunk {
         this.disposables.push(eMat);
       }
     }
+  }
+
+  /**
+   * Геометрия боковых ниш (SideSpurSpec) — см. WorldGenerator: КАЖДАЯ ниша
+   * самостоятельна, у неё собственные пол/стены/торцевая стена в СОБСТВЕННОЙ
+   * прямой (curvature=0) локальной системе координат (spur.start/spur.yaw),
+   * а не общий с родителем пол/стена, «прорезанные» дырой. Родитель и ниша
+   * physически соприкасаются РОВНО по плоскости проёма (доказательство: пол
+   * ниши начинается в тех же мировых точках, где buildWalls вырезал проём
+   * в стене родителя, — см. wallSegments) — не склеены, а состыкованы.
+   */
+  private buildSideSpursEnvironment(wallMat: StandardMaterial): void {
+    for (const spur of this.spec.sideSpurs) this.buildSideSpurGeometry(spur, wallMat);
+  }
+
+  private buildSideSpurGeometry(spur: SideSpurSpec, wallMat: StandardMaterial): void {
+    const frame = { start: spur.start, yaw: spur.yaw, curvature: 0 };
+    const at = (x: number, z: number) => localToWorld(frame, x, z);
+    const half = spur.width / 2;
+    const h = SectionChunk.WALL_HEIGHT;
+    const v = (p: { x: number; z: number }, y: number) => new Vector3(p.x, y, p.z);
+
+    const doorL = at(-half, 0);
+    const doorR = at(half, 0);
+    const farL = at(-half, spur.length);
+    const farR = at(half, spur.length);
+
+    const floorMat = this.makeMaterial(`spurFloorMat_${spur.id}`, this.spec.color);
+    const floor = MeshBuilder.CreateRibbon(
+      `spurFloor_${spur.id}`,
+      { pathArray: [[v(doorL, 0), v(farL, 0)], [v(doorR, 0), v(farR, 0)]], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene
+    );
+    floor.material = floorMat;
+    floor.checkCollisions = true;
+
+    const wallL = MeshBuilder.CreateRibbon(
+      `spurWallL_${spur.id}`,
+      { pathArray: [[v(doorL, 0), v(farL, 0)], [v(doorL, h), v(farL, h)]], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene
+    );
+    wallL.material = wallMat;
+    wallL.checkCollisions = true;
+
+    const wallR = MeshBuilder.CreateRibbon(
+      `spurWallR_${spur.id}`,
+      { pathArray: [[v(doorR, 0), v(farR, 0)], [v(doorR, h), v(farR, h)]], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene
+    );
+    wallR.material = wallMat;
+    wallR.checkCollisions = true;
+
+    // Торцевая стена — тупик закрыт (в отличие от тупика развилки, у ниши
+    // никогда не бывает продолжения).
+    const cap = MeshBuilder.CreateRibbon(
+      `spurCap_${spur.id}`,
+      { pathArray: [[v(farL, 0), v(farR, 0)], [v(farL, h), v(farR, h)]], sideOrientation: Mesh.DOUBLESIDE },
+      this.scene
+    );
+    cap.material = wallMat;
+    cap.checkCollisions = true;
+
+    this.disposables.push(floor, floorMat, wallL, wallR, cap);
   }
 
   /**
@@ -397,6 +507,41 @@ export class SectionChunk {
     }
 
     for (const g of this.spec.gates) this.buildGate(g, gameState);
+
+    this.buildSideSpurEntities(gameState);
+  }
+
+  /**
+   * Ведьма+сундук ниши — координаты в её СОБСТВЕННОЙ локальной системе
+   * (см. buildSideSpurGeometry), а не в системе родителя. Результат кладём
+   * в те же this.witches/this.chests — стример и HUD не различают, откуда
+   * взялась сущность (см. ProximityDetector/WorldStreamer.getActive*).
+   */
+  private buildSideSpurEntities(gameState: GameState): void {
+    for (const spur of this.spec.sideSpurs) {
+      const frame = { start: spur.start, yaw: spur.yaw, curvature: 0 };
+
+      const wPos = localToWorld(frame, spur.witch.x, spur.witch.z);
+      const witch = new Witch(
+        this.scene,
+        new Vector3(wPos.x, 0, wPos.z),
+        getSpellById(spur.witch.spellId),
+        spur.witch.id,
+        gameState.isWitchDefeated(spur.witch.id)
+      );
+      this.witches.push(witch);
+      this.disposables.push(witch);
+
+      const cPos = localToWorld(frame, spur.chest.x, spur.chest.z);
+      const chest = new Chest(
+        this.scene,
+        new Vector3(cPos.x, 0, cPos.z),
+        { id: spur.chest.id, bookIds: spur.chest.bookIds, pageIds: spur.chest.pageIds },
+        gameState
+      );
+      this.chests.push(chest);
+      this.disposables.push(chest);
+    }
   }
 
   /** Выходные ворота на конце секции (развилки — два барьера рядом). */

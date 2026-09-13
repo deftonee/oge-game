@@ -49,6 +49,37 @@ export interface ChestSpec {
 }
 
 /**
+ * Перпендикулярный боковой тупик ("ниша"): короткий САМОСТОЯТЕЛЬНЫЙ рукав,
+ * отходящий от основного коридора ПОД УГЛОМ 90° через проём в его стене —
+ * в отличие от развилки (WorldGenerator.DEADEND_PROBABILITY), которая идёт
+ * ПРЯМО и делит ширину коридора, эта ниша не склеена с телом секции: у неё
+ * собственные пол/стены/торцевая стена в собственной локальной системе
+ * координат (`start`/`yaw`, curvature всегда 0 — рукав короткий и прямой),
+ * связанные с родителем только проёмом-вырезом в его стене (см.
+ * SectionChunk.buildWalls). Всегда ровно один сундук и одна охраняющая его
+ * ведьма (см. SectionContentBuilder.buildSideSpurContent) — не появляется,
+ * если нечем наградить (весь лор собран) или некому напасть (школы заперты).
+ */
+export interface SideSpurSpec {
+  id: string;
+  /** К какой стене родителя пристроена ниша — нужно для выреза проёма. */
+  side: "left" | "right";
+  /** Мировая точка проёма (локальный (0,0) ниши). */
+  start: { x: number; z: number };
+  /** Курс рукава в мире — перпендикулярен родителю в точке проёма. */
+  yaw: number;
+  /** Ширина ниши (она же ширина проёма в стене родителя). */
+  width: number;
+  /** Длина рукава от проёма до тупиковой торцевой стены. */
+  length: number;
+  /** Локальная (вдоль оси РОДИТЕЛЯ) позиция проёма — для выреза в его стене. */
+  doorZ: number;
+  /** Координаты — локальные координаты НИШИ (0,0 = проём). */
+  witch: WitchSpec;
+  chest: ChestSpec;
+}
+
+/**
  * Выходные ворота секции (стоят на её КОНЦЕ). У секции их 0..2:
  *   0 — только у служебной секции подхода к башне (дальше туман и башня),
  *   1 — обычный проход в следующую секцию,
@@ -125,6 +156,8 @@ export interface SectionSpec {
   bonfires: BonfireSpec[];
   practiceTargets: PracticeTargetSpec[];
   chests: ChestSpec[];
+  /** Перпендикулярные боковые тупики-ниши (0..N, обычно 0..1) — см. SideSpurSpec. */
+  sideSpurs: SideSpurSpec[];
   grass: ScatterSeed[];
   borderLeft: ScatterSeed[];
   borderRight: ScatterSeed[];
@@ -165,6 +198,20 @@ const FORK_GATE_FRACTION = 0.5;
 const FORK_BRANCH_LENGTH = { min: 22, max: 38 };
 /** Длина тупикового рукава — заметно короче настоящей ветки: это бонусный уголок, а не часть пути. */
 export const DEADEND_LENGTH = { min: 12, max: 24 };
+
+/**
+ * Боковые ниши (перпендикулярные тупики через проём в стене, см. SideSpurSpec):
+ * шанс на каждую полноширинную стволовую секцию (обычную ИЛИ схождение J —
+ * не на первую и не на подход). Ветки развилки и её собственный тупик сюда
+ * не входят — это отдельный, более крупный механизм.
+ */
+const SIDE_SPUR_PROBABILITY = 0.35;
+/** Ширина ниши = ширина проёма в стене родителя. */
+export const SIDE_SPUR_WIDTH = 6;
+/** Длина рукава ниши — короче даже тупика развилки: это карман на пару шагов, а не отдельная зона. */
+export const SIDE_SPUR_LENGTH = { min: 7, max: 13 };
+/** Отступ от концов секции (вход/выход/ворота), внутри которого проём не ставим. */
+export const SIDE_SPUR_MARGIN = 9;
 
 const TIER_COLORS: Record<number, string> = {
   1: "#3f7d3a", // сочная трава — простые темы
@@ -419,13 +466,10 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   let prevSpec: SectionSpec | null = null;
   let witchCounter = 0;
   let chestCounter = 0;
+  const nextWitchId = (): string => `witch-${witchCounter++}`;
+  const nextChestId = (): string => `chest-${chestCounter++}`;
   /** Конструктор контента секций: единый источник сущностей/декора (rng-поток общий с генератором). */
-  const contentBuilder = new SectionContentBuilder(
-    rng,
-    gameState,
-    () => `witch-${witchCounter++}`,
-    () => `chest-${chestCounter++}`
-  );
+  const contentBuilder = new SectionContentBuilder(rng, gameState, nextWitchId, nextChestId);
 
   /** Базовая секция (без сущностей). */
   const makeSection = (
@@ -458,6 +502,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       bonfires: [],
       practiceTargets: [],
       chests: [],
+      sideSpurs: [],
       grass: [],
       borderLeft: [],
       borderRight: [],
@@ -478,6 +523,71 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       spec,
       intro ?? SectionContentBuilder.defaultRule(gameState, { tier: spec.tier, isFirst })
     );
+  };
+
+  let spurCounter = 0;
+  /**
+   * Пытается пристроить к секции боковую нишу-тупик (см. SideSpurSpec).
+   * Вызывается ПОСЛЕ fillSection — ниша не часть процедуры контента секции
+   * (SectionContentBuilder про неё не знает), а самостоятельная надстройка
+   * поверх уже готового spec: свой сундук+ведьма подбираются отдельно
+   * (buildSideSpurContent), а проём вырезается из УЖЕ сгенерированного
+   * бордюра соответствующей стороны, чтобы декор (кусты/забор/скалы) не
+   * закрывал собой проход в нишу.
+   */
+  const maybeAddSideSpur = (spec: SectionSpec): void => {
+    if (rng() >= SIDE_SPUR_PROBABILITY) return;
+    if (spec.length <= SIDE_SPUR_MARGIN * 2 + 2) return;
+
+    const doorZ = randRange(rng, SIDE_SPUR_MARGIN, spec.length - SIDE_SPUR_MARGIN);
+    const side: "left" | "right" = rng() < 0.5 ? "left" : "right";
+    // Нечем наградить (весь лор собран) или некому напасть (школы/темы
+    // недоступны на этом tier) — ниша в этот раз не появляется, чтобы не
+    // ставить пустой сундук или ведьму без осмысленной темы атаки.
+    const content = contentBuilder.buildSideSpurContent(spec.tier);
+    if (!content) return;
+
+    const spurLength = randRange(rng, SIDE_SPUR_LENGTH.min, SIDE_SPUR_LENGTH.max);
+    const half = SIDE_SPUR_WIDTH / 2;
+    const doorX = side === "right" ? spec.width / 2 : -spec.width / 2;
+    const doorWorld = localToWorld(spec, doorX, doorZ);
+    // Курс ниши — курс родителя В ТОЧКЕ проёма, повёрнутый на ±90°: рукав
+    // уходит СТРОГО ПЕРПЕНДИКУЛЯРНО коридору, а не продолжает его направление
+    // (в отличие от веток настоящей развилки/её тупика).
+    const spurYaw = yawAt(spec, doorZ) + (side === "right" ? Math.PI / 2 : -Math.PI / 2);
+
+    spec.sideSpurs.push({
+      id: `spur-${spurCounter++}`,
+      side,
+      start: doorWorld,
+      yaw: spurYaw,
+      width: SIDE_SPUR_WIDTH,
+      length: spurLength,
+      doorZ,
+      witch: {
+        id: nextWitchId(),
+        x: randRange(rng, -(half - 1), half - 1),
+        z: clamp(spurLength * 0.4, 2, spurLength - 3),
+        spellId: content.spellId,
+      },
+      chest: {
+        id: nextChestId(),
+        x: randRange(rng, -(half - 1), half - 1),
+        z: spurLength - 1.6,
+        bookIds: [content.book.bookId],
+        pageIds: content.book.pageIds,
+      },
+    });
+
+    // Проём режем из уже сгенерированного бордюра этой стороны — иначе кусты
+    // /забор/скалы будут визуально торчать прямо в дверном проёме ниши.
+    const gapMin = doorZ - half - 0.6;
+    const gapMax = doorZ + half + 0.6;
+    if (side === "left") {
+      spec.borderLeft = spec.borderLeft.filter((s) => s.z < gapMin || s.z > gapMax);
+    } else {
+      spec.borderRight = spec.borderRight.filter((s) => s.z < gapMin || s.z > gapMax);
+    }
   };
 
   let worldCount = 0; // стволовых секций (parent + схождения J)
@@ -510,6 +620,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     const parent = makeSection(specIndex, tier, width, length, { x: cursor.x, z: cursor.z }, end, startYaw, curvature, prevSpec);
     yaw = startYaw + curvature * length; // курс в конце секции = курс начала следующей
     fillSection(parent, isFirst);
+    if (!isFirst) maybeAddSideSpur(parent);
 
     const forkAllowed =
       !isFirst &&
@@ -590,6 +701,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       const jEnd = localToWorld({ start: jStart, yaw, curvature: 0 }, 0, jLength);
       const join = makeSection(specIndex + 2, tier, SECTION_WIDTH, jLength, jStart, jEnd, yaw, 0, continuingBranch);
       fillSection(join, false);
+      maybeAddSideSpur(join);
 
       sections.push(parent, branchA, branchB, join);
       prevSpec = join;
@@ -684,7 +796,7 @@ function logWorldSpec(world: WorldSpec, seed: number): void {
       .join(" | ");
     // eslint-disable-next-line no-console
     console.log(
-      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}] entities=w${s.witches.length}/b${s.bonfires.length}/p${s.practiceTargets.length}/c${s.chests.length}`
+      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}] entities=w${s.witches.length}/b${s.bonfires.length}/p${s.practiceTargets.length}/c${s.chests.length}/spur${s.sideSpurs.length}`
     );
   }
   // eslint-disable-next-line no-console
