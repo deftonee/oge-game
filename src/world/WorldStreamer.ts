@@ -5,6 +5,7 @@ import { GameState } from "../core/GameState";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
+import { Chest } from "../entities/Chest";
 import { EnergyGate } from "../entities/EnergyGate";
 
 /**
@@ -194,26 +195,29 @@ export class WorldStreamer {
   /** Ведьмы не исчезают после победы (см. фидбэк) — побеждённые возвращаются
    * тут же, просто в "дружелюбном" состоянии (witch.friendly === true). */
   public getActiveWitches(): Witch[] {
-    const result: Witch[] = [];
-    for (const chunk of this.chunks) result.push(...chunk.witches);
-    return result;
+    return this.collectActive((c) => c.witches);
   }
 
   public getActiveBonfires(): Bonfire[] {
-    const result: Bonfire[] = [];
-    for (const chunk of this.chunks) result.push(...chunk.bonfires);
-    return result;
+    return this.collectActive((c) => c.bonfires);
   }
 
   public getActivePracticeTargets(): PracticeTarget[] {
-    const result: PracticeTarget[] = [];
-    for (const chunk of this.chunks) result.push(...chunk.practiceTargets);
-    return result;
+    return this.collectActive((c) => c.practiceTargets);
+  }
+
+  public getActiveChests(): Chest[] {
+    return this.collectActive((c) => c.chests);
   }
 
   public getActiveGates(): EnergyGate[] {
-    const result: EnergyGate[] = [];
-    for (const chunk of this.chunks) result.push(...chunk.gates);
+    return this.collectActive((c) => c.gates);
+  }
+
+  /** Общий сбор сущностей по всем чанкам (построенным и нет — игровой код сам фильтрует). */
+  private collectActive<T>(pick: (c: SectionChunk) => readonly T[]): T[] {
+    const result: T[] = [];
+    for (const chunk of this.chunks) result.push(...pick(chunk));
     return result;
   }
 }

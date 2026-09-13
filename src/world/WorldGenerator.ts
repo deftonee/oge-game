@@ -1,5 +1,6 @@
-import { ALL_SPELLS, getSpellsBySchool, Spell } from "../data/spells";
-import { GameState, MAX_MASTERY } from "../core/GameState";
+import { ALL_SPELLS, getSpellsBySchool } from "../data/spells";
+import { GameState } from "../core/GameState";
+import { SectionContentBuilder, type SectionContentRule } from "./SectionContent";
 
 
 export interface WitchSpec {
@@ -31,6 +32,20 @@ export interface PracticeTargetSpec {
   x: number;
   z: number;
   kind: PracticeTargetKind;
+}
+
+/**
+ * Сундук в секции (локальные координаты). Содержимое — книги (берутся целиком)
+ * и отдельные страницы; оно участвует в процедурном планировании: пока у
+ * игрока есть не собранные страницы (см. SectionContentBuilder), сундуки
+ * появляются в мире и содержат именно их.
+ */
+export interface ChestSpec {
+  id: string;
+  x: number;
+  z: number;
+  bookIds: string[];
+  pageIds: string[];
 }
 
 /**
@@ -109,6 +124,7 @@ export interface SectionSpec {
   witches: WitchSpec[];
   bonfires: BonfireSpec[];
   practiceTargets: PracticeTargetSpec[];
+  chests: ChestSpec[];
   grass: ScatterSeed[];
   borderLeft: ScatterSeed[];
   borderRight: ScatterSeed[];
@@ -157,6 +173,34 @@ const TIER_COLORS: Record<number, string> = {
 };
 const APPROACH_COLOR = "#2c3550";
 
+/**
+ * Рукописные правила контента для ПЕРВЫХ ДВУХ секций (онбординг) — здесь
+ * указывается ТОЧНОЕ содержимое вместо процедуры из GameState. Массив
+ * индексируется по spec.index: INTRO_RULES[0] — секция спавна, INTRO_RULES[1]
+ * — вторая. Дальше (включая ветки развилки и J) контент процедурный.
+ *
+ * Ограничение «по index» корректно: развилка возможна только с index >= 2
+ * (forkAllowed исключает первую секцию), поэтому #0/#1 — всегда ствол, и
+ * правило не утечёт в ветки.
+ *
+ * Формы:
+ * - `bonfires: { exact: N }` — ровно N костров;
+ * - `chests: { exact: N }` — N сундуков, содержимое подберёт процедура
+ *   (не собранные страницы книг);
+ * - `chests: ChestSpec[]` — сундуки с ТОЧНЫМ содержимым и координатами
+ *   (локальные x поперёк, z вдоль оси секции).
+ */
+const INTRO_RULES: readonly SectionContentRule[] = [
+  // #0 — входной шлюз: костёр обучения у входа, сундуков нет.
+  { bonfires: { exact: 1 }, chests: [] },
+  // #1 — первый «настоящий» коридор: костёр у входа и второй в глубине,
+  // один сундук с конкретной страницей книги.
+  {
+    bonfires: { exact: 2 },
+    chests: [{ id: "chest-intro-1", x: 0, z: 24, bookIds: ["mechanics_basics"], pageIds: ["mechanics_acceleration"] }],
+  },
+];
+
 // --- Простой детерминированный PRNG (mulberry32), чтобы генерация была
 // воспроизводимой при известном seed и не зависела от Math.random напрямую ---
 function mulberry32(seed: number): () => number {
@@ -190,7 +234,6 @@ function normAngle(a: number): number {
 }
 
 const BORDER_STYLES: readonly BorderStyle[] = ["bushes", "fence", "mountains"];
-const PRACTICE_KINDS: readonly PracticeTargetKind[] = ["tree", "dummy", "nettle"];
 
 /**
  * Уровень барьера: доля от ВСЕГО числа заклинаний, зависящая от сложности
@@ -375,6 +418,14 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
   let specIndex = 0;
   let prevSpec: SectionSpec | null = null;
   let witchCounter = 0;
+  let chestCounter = 0;
+  /** Конструктор контента секций: единый источник сущностей/декора (rng-поток общий с генератором). */
+  const contentBuilder = new SectionContentBuilder(
+    rng,
+    gameState,
+    () => `witch-${witchCounter++}`,
+    () => `chest-${chestCounter++}`
+  );
 
   /** Базовая секция (без сущностей). */
   const makeSection = (
@@ -406,46 +457,27 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       witches: [],
       bonfires: [],
       practiceTargets: [],
+      chests: [],
       grass: [],
       borderLeft: [],
       borderRight: [],
     };
   };
 
-  /** Заполняет секцию сущностями и декором (все координаты локальные). */
+  /**
+   * Заполняет секцию сущностями и декором (все координаты локальные) через
+   * «конструктор секций» (SectionContentBuilder). Для первых двух секций
+   * применяются рукописные интро-правила (INTRO_RULES — точное содержимое),
+   * для остальных — правило по умолчанию, выведенное из состояния игры:
+   * «что игроку нужно в следующей секции» (слабые темы для ведьм, не
+   * собранные страницы для сундуков).
+   */
   const fillSection = (spec: SectionSpec, isFirst: boolean): void => {
-    const width = spec.width;
-    const length = spec.length;
-    const placed: { x: number; z: number }[] = [];
-    const bonfireSpot = { x: randRange(rng, -(width / 2 - 1.5), width / 2 - 1.5), z: 2.5 };
-    placed.push(bonfireSpot);
-
-    spec.witches = [];
-    if (!isFirst) {
-      const spellPool = ALL_SPELLS.filter((s) => s.tier <= spec.tier && gameState.isSchoolUnlocked(s.school));
-      const witchCount = randInt(rng, spec.tier === 1 ? 1 : 2, spec.tier === 1 ? 2 : 3) + Math.floor(length / 40);
-      for (let w = 0; w < witchCount; w++) {
-        const spell = pickWeightedByWeakness(rng, spellPool, gameState);
-        const pos = pickSpacedPosition(rng, length, width, placed);
-        placed.push(pos);
-        spec.witches.push({ id: `witch-${witchCounter++}`, x: pos.x, z: pos.z, spellId: spell.id });
-      }
-    }
-
-    spec.bonfires = [{ id: `bonfire-${spec.index}`, x: bonfireSpot.x, z: bonfireSpot.z }];
-
-    const practiceCount = randInt(rng, 2, 4) + Math.floor(length / 40);
-    spec.practiceTargets = [];
-    for (let p = 0; p < practiceCount; p++) {
-      const pos = pickSpacedPosition(rng, length, width, placed, 2.5);
-      placed.push(pos);
-      spec.practiceTargets.push({ id: `practice-${spec.index}-${p}`, x: pos.x, z: pos.z, kind: pick(rng, PRACTICE_KINDS) });
-    }
-
-    spec.grass = generateGrassSeeds(rng, length, width);
-    const borderStyle = spec.borderStyle;
-    spec.borderLeft = generateBorderSeeds(rng, length, -(width / 2 - 0.4), borderStyle);
-    spec.borderRight = generateBorderSeeds(rng, length, width / 2 - 0.4, borderStyle);
+    const intro = INTRO_RULES[spec.index];
+    contentBuilder.apply(
+      spec,
+      intro ?? SectionContentBuilder.defaultRule(gameState, { tier: spec.tier, isFirst })
+    );
   };
 
   let worldCount = 0; // стволовых секций (parent + схождения J)
@@ -610,13 +642,13 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     prevSpec
   );
   approach.color = APPROACH_COLOR;
-  approach.witches = [];
-  approach.bonfires = [];
-  approach.practiceTargets = [];
-  approach.grass = generateGrassSeeds(rng, approachLength, SECTION_WIDTH);
-  const approachBorderStyle = approach.borderStyle;
-  approach.borderLeft = generateBorderSeeds(rng, approachLength, -(SECTION_WIDTH / 2 - 0.4), approachBorderStyle);
-  approach.borderRight = generateBorderSeeds(rng, approachLength, SECTION_WIDTH / 2 - 0.4, approachBorderStyle);
+  // Подход — спокойная зона: без сущностей и сундуков, только трава и бордюры.
+  contentBuilder.apply(approach, {
+    bonfires: { exact: 0 },
+    witches: { exact: 0 },
+    practiceTargets: { exact: 0 },
+    chests: [],
+  });
   sections.push(approach);
 
   const spawnLocal = localToWorld(sections[0], 0, 2.5);
@@ -652,81 +684,9 @@ function logWorldSpec(world: WorldSpec, seed: number): void {
       .join(" | ");
     // eslint-disable-next-line no-console
     console.log(
-      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}]`
+      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}] entities=w${s.witches.length}/b${s.bonfires.length}/p${s.practiceTargets.length}/c${s.chests.length}`
     );
   }
   // eslint-disable-next-line no-console
   console.groupEnd();
-}
-
-/**
- * Ищет позицию для сущности в локальных координатах секции, отстоящую минимум
- * на MIN_SPACING от уже размещённых точек — иначе они могут оказаться почти
- * друг на друге (баг: «бой перезапускается мгновенно»).
- */
-const MIN_ENTITY_SPACING = 4.5;
-function pickSpacedPosition(
-  rng: () => number,
-  length: number,
-  width: number,
-  placed: { x: number; z: number }[],
-  minSpacing: number = MIN_ENTITY_SPACING
-): { x: number; z: number } {
-  const ATTEMPTS = 20;
-  let best: { x: number; z: number } | null = null;
-  let bestMinDist = -Infinity;
-
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    const candidate = { x: randRange(rng, -(width / 2 - 2), width / 2 - 2), z: randRange(rng, 2, length - 2) };
-    let minDist = Infinity;
-    for (const p of placed) {
-      const d = Math.hypot(candidate.x - p.x, candidate.z - p.z);
-      minDist = Math.min(minDist, d);
-    }
-    if (minDist >= minSpacing) return candidate;
-    if (minDist > bestMinDist) {
-      bestMinDist = minDist;
-      best = candidate;
-    }
-  }
-  return best!;
-}
-
-/** Чем ниже мастерство темы у игрока, тем выше шанс встретить ведьму именно с ней. */
-function pickWeightedByWeakness(rng: () => number, pool: Spell[], gameState: GameState): Spell {
-  const weights = pool.map((s) => MAX_MASTERY + 1 - gameState.getMastery(s.id));
-  const total = weights.reduce((a, b) => a + b, 0);
-  let roll = rng() * total;
-  for (let i = 0; i < pool.length; i++) {
-    roll -= weights[i];
-    if (roll <= 0) return pool[i];
-  }
-  return pool[pool.length - 1];
-}
-
-function generateGrassSeeds(rng: () => number, length: number, width: number): ScatterSeed[] {
-  const density = 3.2; // тufтов на метр длины секции
-  const count = Math.round(length * density);
-  const seeds: ScatterSeed[] = [];
-  for (let i = 0; i < count; i++) {
-    seeds.push({
-      x: randRange(rng, -(width / 2 - 0.6), width / 2 - 0.6),
-      z: randRange(rng, 0, length),
-      rot: randRange(rng, 0, Math.PI * 2),
-      scale: randRange(rng, 0.7, 1.3),
-    });
-  }
-  return seeds;
-}
-
-function generateBorderSeeds(rng: () => number, length: number, x: number, style: BorderStyle): ScatterSeed[] {
-  const seeds: ScatterSeed[] = [];
-  // Забор — регулярные столбы почти без пропусков; кусты/скалы — органичнее, с разбросом.
-  const [gapMin, gapMax, jitter] = style === "fence" ? [1.6, 2.0, 0.1] : [2, 3.5, 0.25];
-  let z = randRange(rng, 0.5, 2);
-  while (z < length) {
-    seeds.push({ x: x + randRange(rng, -jitter, jitter), z, rot: randRange(rng, 0, Math.PI * 2), scale: randRange(rng, 0.8, 1.3) });
-    z += randRange(rng, gapMin, gapMax);
-  }
-  return seeds;
 }

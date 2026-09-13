@@ -8,11 +8,13 @@ import type { CombatManager } from "../combat/CombatManager";
 import type { Hud } from "../core/Hud";
 import type { EnergyGate } from "../entities/EnergyGate";
 import type { Bonfire } from "../entities/Bonfire";
+import type { Chest } from "../entities/Chest";
 import type { Witch } from "../entities/Witch";
 import type { PracticeTarget } from "../entities/PracticeTarget";
 
 const ENCOUNTER_RADIUS = 2.0;
 const BONFIRE_RADIUS = 2.5;
+const CHEST_RADIUS = 2.2;
 const PRACTICE_RADIUS = 2.2;
 // Радиус подхода к барьеру: считается от ЛИНИИ барьера (по всей его ширине),
 // а не от центра — иначе у широких ворот взаимодействие было бы только в середине.
@@ -52,6 +54,7 @@ function gateDistanceSq(gate: EnergyGate, x: number, z: number): number {
 export class ProximityDetector {
   public nearGate: EnergyGate | null = null;
   public nearBonfire: Bonfire | null = null;
+  public nearChest: Chest | null = null;
   public nearFriendlyWitch: Witch | null = null;
   public nearPracticeTarget: PracticeTarget | null = null;
 
@@ -73,7 +76,7 @@ export class ProximityDetector {
     const { player, streamer, gameState, combat, hud, cooldown } = this.deps;
 
     if (menuOpen) {
-      this.nearGate = this.nearBonfire = this.nearFriendlyWitch = this.nearPracticeTarget = null;
+      this.nearGate = this.nearBonfire = this.nearChest = this.nearFriendlyWitch = this.nearPracticeTarget = null;
       hud.setInteractHint(null);
       hud.setLockedHint(null);
       return;
@@ -81,6 +84,7 @@ export class ProximityDetector {
 
     const bonfires = streamer.getActiveBonfires();
     const witches = streamer.getActiveWitches();
+    const chests = streamer.getActiveChests();
     const practiceTargets = streamer.getActivePracticeTargets();
     const activeGates = streamer.getActiveGates();
 
@@ -113,11 +117,22 @@ export class ProximityDetector {
       }
     }
 
+    // Сундуки — быстрый пикап: открываются по E, не блокируют ничего серьёзнее.
+    this.nearChest = null;
+    if (!this.nearGate && !this.nearBonfire) {
+      for (const chest of chests) {
+        if (Vector3.Distance(chest.position, player.position) <= CHEST_RADIUS) {
+          this.nearChest = chest;
+          break;
+        }
+      }
+    }
+
     // Ведьмы: дружелюбные (уже побеждённые) — по E на спарринг; враждебные —
     // автоматически при подходе (если тема изучена) или подсказка (если нет).
     this.nearFriendlyWitch = null;
     let lockedHint: string | null = null;
-    if (!this.nearGate && !this.nearBonfire) {
+    if (!this.nearGate && !this.nearBonfire && !this.nearChest) {
       const cooldownActive = cooldown.isGlobalCooldownActive();
       for (const witch of witches) {
         const dist = Vector3.Distance(witch.position, player.position);
@@ -152,7 +167,7 @@ export class ProximityDetector {
 
     // Объекты для практики — тоже по E, но только если рядом нет ничего важнее.
     this.nearPracticeTarget = null;
-    if (!this.nearGate && !this.nearBonfire && !this.nearFriendlyWitch) {
+    if (!this.nearGate && !this.nearBonfire && !this.nearChest && !this.nearFriendlyWitch) {
       for (const target of practiceTargets) {
         if (Vector3.Distance(target.position, player.position) <= PRACTICE_RADIUS) {
           this.nearPracticeTarget = target;
@@ -171,6 +186,7 @@ export class ProximityDetector {
       return `${key} — барьер ветки «${name}»: нужно ${this.nearGate.requiredSpells} изученных тем`;
     }
     if (this.nearBonfire) return `${key} — сесть у костра`;
+    if (this.nearChest) return `${key} — открыть сундук`;
     if (this.nearFriendlyWitch) return `${key} — спарринг с побеждённой ведьмой`;
     if (this.nearPracticeTarget) return `${key} — потренироваться`;
     return null;

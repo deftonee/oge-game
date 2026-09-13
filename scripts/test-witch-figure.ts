@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   const world = generateWorld(gameState, 42);
   const streamer = new WorldStreamer(scene, world, gameState);
 
-  streamer.update(world.spawnPoint.z);
+  streamer.update(world.spawnPoint.x, world.spawnPoint.z);
   const witches = streamer.getActiveWitches();
   check(witches.length > 0, "у старта должны быть активные ведьмы");
   console.log(`активных ведьм у старта: ${witches.length}`);

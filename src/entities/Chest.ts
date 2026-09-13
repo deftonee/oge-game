@@ -81,6 +81,17 @@ export class Chest {
     if (this.opened) this.applyOpenedVisual();
   }
 
+  /** Разборка сундука при выгрузке чанка (WorldStreamer: build/dispose секций). */
+  public dispose(): void {
+    // Материалы не наследуются dispose() узла — освобождаем явно (уникальные).
+    const materials = new Set<StandardMaterial>();
+    for (const m of this.root.getChildMeshes()) {
+      if (m.material) materials.add(m.material as StandardMaterial);
+    }
+    this.root.dispose();
+    for (const mat of materials) mat.dispose();
+  }
+
   private buildModel(): TransformNode {
     const root = new TransformNode(`chest_${this.id}`, this.scene);
 
@@ -125,3 +136,12 @@ export class Chest {
       bookIds: [...this.opts.bookIds],
       pageIds: [...(this.opts.pageIds ?? [])],
     };
+    return root;
+  }
+
+  /** Визуал открытого сундука: крышка поднята. Не храним ссылку — ищем по имени. */
+  private applyOpenedVisual(): void {
+    const lid = this.root.getChildMeshes().find((m) => m.name === `chestLid_${this.id}`);
+    if (lid) lid.rotation.x = -Math.PI / 3;
+  }
+}

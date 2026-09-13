@@ -70,6 +70,7 @@ export class Game {
     const interaction = createInteraction({
       managers,
       proximity,
+      gameState,
       duelRoundsToWin: this.duelRoundsToWin,
       emulateMobile,
     });

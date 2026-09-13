@@ -1,6 +1,8 @@
 import { MobileControls } from "../mobile/MobileControls";
 import { ProximityDetector } from "../world/proximity";
 import type { GameManagers } from "./managers";
+import type { GameState } from "./GameState";
+import type { ChestContents } from "../entities/Chest";
 
 export interface InteractionApi {
   mobile: MobileControls;
@@ -11,6 +13,7 @@ export interface InteractionApi {
 export interface InteractionDeps {
   managers: GameManagers;
   proximity: ProximityDetector;
+  gameState: GameState;
   duelRoundsToWin: () => number;
   /** Принудительно включить мобильные контролы (эмуляция с компа). */
   emulateMobile: boolean;
@@ -24,7 +27,19 @@ export interface InteractionDeps {
  * ворота > костёр > дружелюбная ведьма > тренировочная цель.
  */
 export function createInteraction(deps: InteractionDeps): InteractionApi {
-  const { managers, proximity } = deps;
+  const { managers, proximity, gameState } = deps;
+
+  /**
+   * Содержимое сундука переезжает в состояние игрока: страницы книг
+   * помечаются собранными (книги — набором своих страниц). Повторная сборка
+   * чанка (WorldStreamer) не потеряет прогресс — GameState это переживает.
+   */
+  const collectContents = (contents: ChestContents): void => {
+    for (const book of contents.books) {
+      for (const page of book.pages) gameState.collectBookPage(page.id);
+    }
+    for (const id of contents.pageIds) gameState.collectBookPage(id);
+  };
 
   const anyMenuOpen = (): boolean =>
     managers.combat.isActive ||
@@ -42,6 +57,13 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
     } else if (proximity.nearBonfire) {
       if (learning.isActive) learning.close();
       else learning.open();
+    } else if (proximity.nearChest) {
+      const contents = proximity.nearChest.open();
+      collectContents(contents);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[chest] ${proximity.nearChest.id} открыт: книги=[${contents.books.map((b) => b.id).join(",") || "-"}] страницы=[${contents.pageIds.join(",") || "-"}]`
+      );
     } else if (proximity.nearFriendlyWitch) {
       combat.startEncounter(proximity.nearFriendlyWitch, deps.duelRoundsToWin());
     } else if (proximity.nearPracticeTarget) {

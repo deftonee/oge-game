@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test:world-gen": "esbuild scripts/test-world-gen.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-world-gen.cjs && node .tmp/test-world-gen.cjs",
+    "test:section-content": "esbuild scripts/test-section-content.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-section-content.cjs && node .tmp/test-section-content.cjs",
     "test:world-streamer": "esbuild scripts/test-world-streamer.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-world-streamer.cjs && node .tmp/test-world-streamer.cjs",
     "test:witch-figure": "esbuild scripts/test-witch-figure.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-witch-figure.cjs && node .tmp/test-witch-figure.cjs",
     "test:spells": "esbuild scripts/test-spells.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-spells.cjs && node .tmp/test-spells.cjs",

@@ -121,6 +121,9 @@ npm run dev
 npm run test:world        # оба теста сразу
 npm run test:world-gen    # инварианты генерации: без разрывов пола, границы
                            # секций, уникальные id, разброс ведьм друг от друга
+npm run test:section-content  # «конструктор секций»: точные правила,
+                              # процедура из GameState (сундуки с не собранным
+                              # лором), детерминизм по seed
 npm run test:world-streamer  # окно ±1 секции реально выгружает лишнее,
                               # дружелюбные ведьмы и открытые ворота переживают
                               # пересборку секции
@@ -131,19 +134,22 @@ npm run test:world-streamer  # окно ±1 секции реально выгр
 ```
 src/
   core/          — движковая обвязка: игрок, HUD, GameState (прогресс)
-  entities/      — Witch, Bonfire, PracticeTarget, EnergyGate
+  entities/      — Witch, Bonfire, PracticeTarget, EnergyGate, Chest
   combat/        — боевой цикл и его UI
   learning/      — обучение у костра (два этапа)
   practice/      — тренировка у статических объектов (без ставок)
   gates/         — энергетические барьеры между секциями
   ui/            — экран графа заклинаний
-  world/         — генерация мира: WorldGenerator (данные/сиды),
-                   SectionChunk (сборка/разборка секции), WorldStreamer
-                   (какие секции держать в памяти), Tower (башня отдельно)
-  data/          — заклинания и банк задач
+  world/         — генерация мира: WorldGenerator (структура: геометрия/ворота),
+                   SectionContent (конструктор секций: точные правила контента
+                   + процедура из GameState), SectionChunk (сборка/разборка
+                   секции), WorldStreamer (какие секции держать в памяти),
+                   Tower (башня отдельно)
+  data/          — заклинания, книги и банк задач
   main.ts        — сборка сцены и игровой цикл
   style.css      — стили HUD, боя, графа, костра и барьеров
 scripts/
   test-world-gen.ts       — инварианты процедурной генерации
+  test-section-content.ts — конструктор секций: точные правила, процедура из состояния
   test-world-streamer.ts  — стриминг секций, дружелюбные ведьмы, ворота
 ```
