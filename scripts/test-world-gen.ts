@@ -6,6 +6,8 @@ import {
   FIRST_SECTION_WIDTH,
   SECTION_WIDTH,
   DEADEND_LENGTH,
+  FORK_BRANCH_LENGTH,
+  FORK_DIVERGENCE_ANGLE,
   SIDE_SPUR_WIDTH,
   SIDE_SPUR_LENGTH,
   SIDE_SPUR_MARGIN,
@@ -63,7 +65,16 @@ for (let seed = 1; seed <= 200; seed++) {
         check(s.gates.length === 0, `seed ${seed}: ветка заканчивается свободным входом в схождение`);
       }
       check(!!s.forkGateId && s.forkParentIndex !== undefined, `seed ${seed}: ветка без привязки к воротам`);
-      check(s.curvature === 0, `seed ${seed}: ветка развилки должна быть прямой (curvature=0)`);
+      // Ветки больше не прямые (curvature=0) — они расходятся зеркальной
+      // дугой (см. FORK_DIVERGENCE_ANGLE): скорость поворота (рад/м) должна
+      // лежать в диапазоне angle/branchLen для ЛЮБОЙ длины реальной ветки
+      // (тупиковая использует ту же скорость, просто короче — см. mkBranch).
+      const minRate = FORK_DIVERGENCE_ANGLE.min / FORK_BRANCH_LENGTH.max;
+      const maxRate = FORK_DIVERGENCE_ANGLE.max / FORK_BRANCH_LENGTH.min;
+      check(
+        Math.abs(s.curvature) >= minRate - 1e-9 && Math.abs(s.curvature) <= maxRate + 1e-9,
+        `seed ${seed}: скорость расхождения ветки вне диапазона (curvature=${s.curvature.toFixed(5)})`
+      );
     } else if (!isApproach) {
       // Обычная стволовая секция или схождение J
       check(s.width === SECTION_WIDTH, `seed ${seed}: обычная секция должна быть 3× ширины (${s.width})`);
@@ -188,7 +199,14 @@ for (let seed = 1; seed <= 200; seed++) {
           Math.abs(a.yaw - parentEndYaw) < 1e-9 && Math.abs(b.yaw - parentEndYaw) < 1e-9,
           `seed ${seed}: ветки не продолжают курс родителя на его конце`
         );
-        check(a.curvature === 0 && b.curvature === 0, `seed ${seed}: ветки должны быть прямыми (curvature=0)`);
+        // Ветки расходятся ЗЕРКАЛЬНО: общая по модулю скорость поворота,
+        // противоположный знак (см. FORK_DIVERGENCE_ANGLE и curvatureA/B в
+        // генераторе) — это и есть "разные стороны", а не "обе прямые".
+        check(a.curvature !== 0 && b.curvature !== 0, `seed ${seed}: ветки должны расходиться (curvature=0 больше не ожидается)`);
+        check(
+          Math.abs(a.curvature + b.curvature) < 1e-9,
+          `seed ${seed}: ветки должны расходиться ЗЕРКАЛЬНО (curvature противоположного знака, той же величины)`
+        );
         check(
           !(a.isDeadEnd && b.isDeadEnd),
           `seed ${seed}: у развилки ${s.index} обе ветки тупиковые — тогда дальше пути вообще нет`
@@ -225,17 +243,29 @@ for (let seed = 1; seed <= 200; seed++) {
         // Тупиковая ветка НЕ обязана доставать до кромки J — в этом и есть
         // весь смысл тупика (см. isDeadEnd). Проверяем только ту ветку(-и),
         // что реально продолжается в J.
+        //
+        // Допуск теперь не 1e-6, а ~1м: расходящиеся ветки — дуги (см.
+        // FORK_DIVERGENCE_ANGLE), а хорда дуги всегда чуть короче, чем
+        // "долевое" branchLen (sin(angle)/angle < 1) — конец ветки лежит
+        // МИНИМАЛЬНО позади плоскости кромки J, а не точно на ней (для
+        // худшего случая в нашем диапазоне углов/длин это доли метра —
+        // см. вывод в ревью). Плюс отдельно проверяем, что боковой снос
+        // (Δ) не выводит ветку ЗА ширину J — именно этот запас и подбирала
+        // верхняя граница FORK_DIVERGENCE_ANGLE.
+        const projU = (p: { x: number; z: number }) => (p.x - s.start.x) * perpX + (p.z - s.start.z) * perpZ;
         if (!prev.isDeadEnd) {
           check(
-            distPointToSegment(prev.end.x, prev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
-            `seed ${seed}: конец ветки B не на кромке J`
+            distPointToSegment(prev.end.x, prev.end.z, a.x, a.z, b.x, b.z) < 1.0,
+            `seed ${seed}: конец ветки B слишком далеко от кромки J`
           );
+          check(Math.abs(projU(prev.end)) <= half - 0.5, `seed ${seed}: конец ветки B выходит за ширину J`);
         }
         if (!prevPrev.isDeadEnd) {
           check(
-            distPointToSegment(prevPrev.end.x, prevPrev.end.z, a.x, a.z, b.x, b.z) < 1e-6,
-            `seed ${seed}: конец ветки A не на кромке J`
+            distPointToSegment(prevPrev.end.x, prevPrev.end.z, a.x, a.z, b.x, b.z) < 1.0,
+            `seed ${seed}: конец ветки A слишком далеко от кромки J`
           );
+          check(Math.abs(projU(prevPrev.end)) <= half - 0.5, `seed ${seed}: конец ветки A выходит за ширину J`);
         }
 
         // Регрессия: J тоже не должно накладываться на коридор родителя.

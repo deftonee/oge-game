@@ -90,6 +90,7 @@ export class SectionChunk {
     this.buildJointPatch();
     this.buildSideSpursEnvironment(wallMat);
     this.buildScatter(this.spec.grass, "grass");
+    this.buildScatter(this.spec.bushes, "bush");
     this.buildBorder(this.spec.borderLeft);
     this.buildBorder(this.spec.borderRight);
   }
@@ -259,19 +260,19 @@ export class SectionChunk {
     if (spec.index === 0 || spec.prevWidth <= 0) return;
 
     const curHalf = spec.width / 2;
-    const prevHalf = spec.prevWidth / 2;
 
-    // --- бордюры-«уши» по кромке входа при разной ширине секций ---
+    // --- бордюры-«уши» по кромке входа при разной ширине/положении секций ---
     // ВАЖНО: раньше формула клала «уши» СИММЕТРИЧНО вокруг spec.start
     // (±midHalf), что верно только если предыдущая и текущая секции
     // делят одну осевую линию. У веток развилки и схождения J это не
-    // так — они смещены вбок на ±SECTION_WIDTH/4, — и старая формула
-    // сажала бордюры мимо: либо в пустоту за пределами всего коридора,
-    // либо горбом высотой 0.6 прямо посреди пола соседней ветки (видно
-    // как «стены не стыкуются, разной высоты»). Считаем реальную
-    // проекцию prevEnd на ось ТЕКУЩЕЙ секции — без предположения об
-    // общем центре — и «ухо» ставим только там, где предыдущая секция
-    // ДЕЙСТВИТЕЛЬНО торчит за пределы текущей.
+    // так — они смещены вбок на ±SECTION_WIDTH/4 и вдобавок расходятся
+    // (см. FORK_DIVERGENCE_ANGLE) — старая формула сажала бордюры мимо:
+    // либо в пустоту за пределами всего коридора, либо горбом высотой 0.6
+    // прямо посреди пола соседней ветки. Считаем реальную проекцию prevEnd
+    // (и, если есть, prevEnd2 — вторая разошедшаяся ветка настоящей
+    // развилки, см. SectionSpec.prevWidth2) на ось ТЕКУЩЕЙ секции — без
+    // предположения об общем центре — и «ухо» ставим только там, где
+    // покрытие обеих веток ДЕЙСТВИТЕЛЬНО не дотягивается до края текущей.
     //
     // Ветки развилки в «ушах» не нуждаются вовсе: их единственная
     // «оголённая» кромка обращена к территории соседней ветки, которая
@@ -283,16 +284,35 @@ export class SectionChunk {
     if (!spec.forkBranch) {
       const perpCX = Math.cos(spec.yaw);
       const perpCZ = -Math.sin(spec.yaw);
-      const prevCenterU = (spec.prevEnd.x - spec.start.x) * perpCX + (spec.prevEnd.z - spec.start.z) * perpCZ;
-      const prevMin = prevCenterU - prevHalf;
-      const prevMax = prevCenterU + prevHalf;
+
+      // Проекция ОДНОЙ предыдущей секции (width/end) на ось текущей — общий
+      // хелпер, чтобы не дублировать формулу для prev и (опционально) prev2.
+      const project = (width: number, end: { x: number; z: number }) => {
+        const centerU = (end.x - spec.start.x) * perpCX + (end.z - spec.start.z) * perpCZ;
+        const half = width / 2;
+        return { min: centerU - half, max: centerU + half };
+      };
+
+      const prevRange = project(spec.prevWidth, spec.prevEnd);
+      // Если есть вторая ветка (настоящая развилка, а не тупик) — реальное
+      // покрытие "предыдущего" по факту это ОБЪЕДИНЕНИЕ обеих веток, а не
+      // только одной: иначе кромка второй ветки (симметричный снос в
+      // противоположную сторону) осталась бы вовсе без патча.
+      let prevMin = prevRange.min;
+      let prevMax = prevRange.max;
+      if (spec.prevWidth2 > 0) {
+        const prev2Range = project(spec.prevWidth2, spec.prevEnd2);
+        prevMin = Math.min(prevMin, prev2Range.min);
+        prevMax = Math.max(prevMax, prev2Range.max);
+      }
+
       const curMin = -curHalf;
       const curMax = curHalf;
 
       const gaps: { center: number; halfLen: number }[] = [];
-      const leftGap = curMin - prevMin; // предыдущая секция торчит левее текущей
+      const leftGap = curMin - prevMin; // предыдущее покрытие торчит левее текущей
       if (leftGap > 0.35) gaps.push({ center: (prevMin + curMin) / 2, halfLen: leftGap / 2 });
-      const rightGap = prevMax - curMax; // предыдущая секция торчит правее текущей
+      const rightGap = prevMax - curMax; // предыдущее покрытие торчит правее текущей
       if (rightGap > 0.35) gaps.push({ center: (curMax + prevMax) / 2, halfLen: rightGap / 2 });
 
       if (gaps.length > 0) {
@@ -391,18 +411,21 @@ export class SectionChunk {
    * Позиции сидов переведены в МИРОВЫЕ координаты секции (поворот yaw учтён
    * в матрице инстанса вместе с собственным вращением сида).
    */
-  private buildScatter(seeds: ScatterSeed[], kind: "grass"): void {
+  private buildScatter(seeds: ScatterSeed[], kind: "grass" | "bush"): void {
     if (seeds.length === 0) return;
 
-    const mat = this.makeMaterial(`${kind}Mat_${this.spec.index}`, "#5fae4a");
+    const mat = this.makeMaterial(`${kind}Mat_${this.spec.index}`, kind === "bush" ? "#2f5b34" : "#5fae4a");
 
-    const base = MeshBuilder.CreateCylinder(
-      `${kind}_${this.spec.index}`,
-      { diameterTop: 0, diameterBottom: 0.18, height: 0.4 },
-      this.scene
-    );
+    const base =
+      kind === "bush"
+        ? MeshBuilder.CreateSphere(`${kind}_${this.spec.index}`, { diameter: 1.1, segments: 6 }, this.scene)
+        : MeshBuilder.CreateCylinder(
+            `${kind}_${this.spec.index}`,
+            { diameterTop: 0, diameterBottom: 0.18, height: 0.4 },
+            this.scene
+          );
     base.material = mat;
-    this.scatterInstances(base, seeds, 0.2);
+    this.scatterInstances(base, seeds, kind === "bush" ? 0.45 : 0.2);
     this.disposables.push(base, mat);
   }
 

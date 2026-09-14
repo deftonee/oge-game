@@ -57,6 +57,8 @@ export interface SectionContentRule {
   chests?: ChestSpec[] | Bounds;
   /** Плотность травы (сидов на метр длины; 0 — без травы). */
   grassDensity?: number;
+  /** Плотность кустов внутри коридора (сидов на метр длины; 0 — без кустов). */
+  bushDensity?: number;
 }
 
 export interface SectionContentContext {
@@ -201,8 +203,12 @@ export class SectionContentBuilder {
       }
     }
 
-    // --- Декор: трава и бордюры по стилю секции. ---
-    spec.grass = generateGrassSeeds(this.rng, length, width, merged.grassDensity ?? 3.2);
+    // --- Декор: трава, кусты и бордюры по стилю секции. ---
+    // Плотность травы ×7 от прежней (3.2 → 22.4 сидов/м) — по ТЗ: "почаще".
+    spec.grass = generateGrassSeeds(this.rng, length, width, merged.grassDensity ?? 22.4);
+    // Кусты — заметно реже травы (отдельные ориентиры/будущие укрытия, а не
+    // ковёр) и крупнее — см. generateBushSeeds и SectionChunk.buildScatter.
+    spec.bushes = generateBushSeeds(this.rng, length, width, merged.bushDensity ?? 0.15);
     spec.borderLeft = generateBorderSeeds(this.rng, length, -(width / 2 - 0.4), spec.borderStyle);
     spec.borderRight = generateBorderSeeds(this.rng, length, width / 2 - 0.4, spec.borderStyle);
   }
@@ -294,6 +300,27 @@ function generateGrassSeeds(rng: () => number, length: number, width: number, de
       z: randRange(rng, 0, length),
       rot: randRange(rng, 0, Math.PI * 2),
       scale: randRange(rng, 0.7, 1.3),
+    });
+  }
+  return seeds;
+}
+
+/**
+ * Кусты внутри проходимой ширины (не бордюрные) — задел под будущую
+ * механику пряток игрока: расставлены РЕДКО и с бОльшим случайным
+ * масштабом, чтобы читаться как отдельные укрытия-ориентиры, а не как
+ * ковёр (как трава). Сейчас чисто декоративны (без коллизии) — то же
+ * ограничение, что и у травы/бордюров, до появления самой механики.
+ */
+function generateBushSeeds(rng: () => number, length: number, width: number, density: number): ScatterSeed[] {
+  const count = Math.round(length * density);
+  const seeds: ScatterSeed[] = [];
+  for (let i = 0; i < count; i++) {
+    seeds.push({
+      x: randRange(rng, -(width / 2 - 0.9), width / 2 - 0.9),
+      z: randRange(rng, 0, length),
+      rot: randRange(rng, 0, Math.PI * 2),
+      scale: randRange(rng, 0.85, 1.5),
     });
   }
   return seeds;

@@ -138,6 +138,16 @@ export interface SectionSpec {
    */
   prevWidth: number;
   prevEnd: { x: number; z: number };
+  /**
+   * Второй "шов" для секции-схождения J после НАСТОЯЩЕЙ развилки (не
+   * тупика): т.к. теперь обе ветки расходятся в разные стороны (см.
+   * FORK_DIVERGENCE_ANGLE), у J фактически ДВЕ кромки-мостика, а не одна —
+   * prevWidth/prevEnd покрывают "продолжающую" ветку (как и раньше), а эта
+   * пара — вторую. prevWidth2<=0 означает "второго шва нет" (обычная секция
+   * или J после тупика — вторая ветка до J не доходит, патчить нечего).
+   */
+  prevWidth2: number;
+  prevEnd2: { x: number; z: number };
   /** Признак ветки развилки: A/B параллельные коридоры за двойными воротами. */
   forkBranch?: "a" | "b";
   /**
@@ -159,6 +169,14 @@ export interface SectionSpec {
   /** Перпендикулярные боковые тупики-ниши (0..N, обычно 0..1) — см. SideSpurSpec. */
   sideSpurs: SideSpurSpec[];
   grass: ScatterSeed[];
+  /**
+   * Кусты внутри проходимой ширины коридора (не бордюрные — те стоят у стен
+   * и чисто декоративны, см. BorderStyle "bushes"). Задел под будущую
+   * механику пряток: сейчас чисто декоративные (без коллизии, как и трава),
+   * но расставлены заметно реже и крупнее травы — как отдельные ориентиры/
+   * укрытия, а не сплошной ковёр.
+   */
+  bushes: ScatterSeed[];
   borderLeft: ScatterSeed[];
   borderRight: ScatterSeed[];
 }
@@ -176,10 +194,18 @@ export const SECTION_WIDTH = FIRST_SECTION_WIDTH * 3;
 const FIRST_SECTION_LENGTH = { min: 12, max: 18 };
 const SECTION_LENGTH = { min: 36, max: 54 }; // 12-18 × 3
 
-/** Максимальный изгиб на стыке секций в рад (~17°). */
-const MAX_BEND = 0.3;
-/** Потолок накопленного изгиба трассы, чтобы коридор не закручивался в спираль. */
-const MAX_YAW = 1.05;
+/**
+ * Максимальный изгиб на стыке секций в рад (было 0.3 ≈17° — мало заметно на
+ * секции длиной 36-54м; теперь ~29°, весь коридор явно "гуляет", а не идёт
+ * почти по прямой с редкими лёгкими подворотами).
+ */
+const MAX_BEND = 0.5;
+/**
+ * Потолок накопленного изгиба трассы (было 1.05 ≈60°), чтобы коридор не
+ * закручивался в спираль — поднят до ~80°, вслед за MAX_BEND: иначе более
+ * резкие повороты почти сразу упирались бы в старый потолок и глушились.
+ */
+const MAX_YAW = 1.4;
 /** Вероятность, что секция закончится развилкой (двумя воротами). */
 const FORK_PROBABILITY = 0.45;
 /**
@@ -195,7 +221,17 @@ const DEADEND_PROBABILITY = 0.2;
 /** Доля ширины коридора, которую закрывает один барьер при развилке. */
 const FORK_GATE_FRACTION = 0.5;
 /** Длина параллельных коридоров-веток за развилкой (до схождения в общую секцию). */
-const FORK_BRANCH_LENGTH = { min: 22, max: 38 };
+export const FORK_BRANCH_LENGTH = { min: 22, max: 38 };
+/**
+ * Суммарный угол расхождения ветки развилки (рад) от исходного курса —
+ * см. развёрнутый комментарий у места использования (генератор веток):
+ * величина случайна на каждую развилку, знак — зеркально противоположный
+ * у двух веток (не склеены, расходятся в РАЗНЫЕ стороны). Верхняя граница
+ * подобрана так, чтобы даже на самой длинной ветке (FORK_BRANCH_LENGTH.max)
+ * боковой снос к месту стыка с J оставался заметно меньше off (=SECTION_WIDTH/4)
+ * — иначе ветка промахивается мимо кромки схождения.
+ */
+export const FORK_DIVERGENCE_ANGLE = { min: 0.12, max: 0.26 };
 /** Длина тупикового рукава — заметно короче настоящей ветки: это бонусный уголок, а не часть пути. */
 export const DEADEND_LENGTH = { min: 12, max: 24 };
 
@@ -481,7 +517,8 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     end: { x: number; z: number },
     sectionYaw: number,
     curvature: number,
-    prev: SectionSpec | null
+    prev: SectionSpec | null,
+    prev2: SectionSpec | null = null
   ): SectionSpec => {
     return {
       index,
@@ -498,12 +535,15 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       partitionDepth: 0,
       prevWidth: prev ? prev.width : 0,
       prevEnd: prev ? { x: prev.end.x, z: prev.end.z } : { x: 0, z: 0 },
+      prevWidth2: prev2 ? prev2.width : 0,
+      prevEnd2: prev2 ? { x: prev2.end.x, z: prev2.end.z } : { x: 0, z: 0 },
       witches: [],
       bonfires: [],
       practiceTargets: [],
       chests: [],
       sideSpurs: [],
       grass: [],
+      bushes: [],
       borderLeft: [],
       borderRight: [],
     };
@@ -637,7 +677,7 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
     if (fork || deadEnd) {
       assignExitGates(parent, rng, gameState, gateSchoolUsage, true, !deadEnd);
 
-      // --- Две ПАРАЛЛЕЛЬНЫЕ ветки за двойными воротами (см. ТЗ): каждая
+      // --- Две САМОСТОЯТЕЛЬНЫЕ ветки за двойными воротами (см. ТЗ): каждая
       // половинка коридора шириной w/2 идёт своим рукавом. У настоящей
       // развилки обе сходятся в J на одной кромке; у тупика — только ОДНА
       // (случайно a или b) доходит до J, вторая — короткий рукав без выхода
@@ -652,6 +692,26 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       // Какая из двух дверей — тупик (если это вообще тупик, а не развилка).
       const deadSlot: "a" | "b" | null = deadEnd ? (rng() < 0.5 ? "a" : "b") : null;
 
+      // Ветки расходятся в РАЗНЫЕ стороны — не склеены, а самостоятельны:
+      // ЗЕРКАЛЬНАЯ случайная дуга (одна гнётся на -angle, другая на те же
+      // +angle — величина общая, знак противоположный, "какая куда" тоже
+      // случайно). Это ключевое свойство (см. формальный вывод в ревью):
+      // при curvature_B = -curvature_A конец ветки B — ТОЧНОЕ зеркальное
+      // отражение конца ветки A относительно исходной (прямой) оси parent'а,
+      // а значит у обеих одна и та же "глубина" вдоль этой оси — именно
+      // это позволяет плоской кромке J (см. jStart ниже, она НЕ гнётся)
+      // состыковаться сразу с обеими, а не только с одной. Отсюда же и
+      // ограничение амплитуды: чем больше angle, тем сильнее каждая ветка
+      // "проседает" ВЫШЕ своей стартовой полуширины off к моменту стыка с
+      // J — верхняя граница FORK_DIVERGENCE_ANGLE подобрана так, чтобы даже
+      // на самой длинной ветке (FORK_BRANCH_LENGTH.max) просадка оставалась
+      // заметно меньше off — с запасом на генерализованный "ушной" фикс
+      // (см. prevWidth2/prevEnd2 и SectionChunk.buildJointPatch).
+      const divergeAngle = randRange(rng, FORK_DIVERGENCE_ANGLE.min, FORK_DIVERGENCE_ANGLE.max);
+      const divergeSign = rng() < 0.5 ? 1 : -1; // какая ветка гнётся влево, а какая вправо — тоже случайно
+      const curvatureA = (-divergeSign * divergeAngle) / branchLen;
+      const curvatureB = (divergeSign * divergeAngle) / branchLen;
+
       // ВАЖНО: ветки и J начинаются у КОНЦА родителя (там, где стоят её
       // ворота — см. GateSpec/"Выходные ворота ... стоят на её КОНЦЕ"),
       // а не у cursor: на этом шаге цикла cursor всё ещё указывает на
@@ -660,23 +720,16 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       // собственного коридора родителя (совпадающие/перекрывающиеся оси на
       // добрый десяток метров) — отсюда и «мир перестраивается под ногами»
       // возле развилок, и накладывающиеся полы/стены в этой зоне.
-      // Ветки и схождение остаются ПРЯМЫМИ (curvature=0): чтобы обе ветки
-      // реально были параллельны и сошлись в одну общую кромку J, их изгиб
-      // должен быть согласован (концентрические дуги с чуть разной кривизной
-      // для внутренней/внешней "полосы" — иначе расстояние между ними на
-      // длине branchLen "плывёт"). Отдельная, более тяжёлая задача — см.
-      // ревью; сама развилка от этого не выглядит хуже, чем раньше (стыки
-      // parent->ветки->J и без того были прямыми: yaw тут не менялся и в
-      // старой версии).
       const mkBranch = (branch: "a" | "b", sign: number, gateId: string): SectionSpec => {
         const isDead = branch === deadSlot;
         // Тупик короче настоящей ветки (это бонусный уголок, не часть пути)
         // и не сложнее самой развилки (branchTier — только для проходных).
         const branchLength = isDead ? randRange(rng, DEADEND_LENGTH.min, DEADEND_LENGTH.max) : branchLen;
         const thisTier = isDead ? tier : branchTier;
+        const curvature = branch === "a" ? curvatureA : curvatureB;
         const start = { x: end.x - perpX * off * sign, z: end.z - perpZ * off * sign };
-        const branchEnd = { x: start.x + dirX * branchLength, z: start.z + dirZ * branchLength };
-        const spec = makeSection(specIndex + 1, thisTier, SECTION_WIDTH / 2, branchLength, start, branchEnd, yaw, 0, parent);
+        const branchEnd = localToWorld({ start, yaw, curvature }, 0, branchLength);
+        const spec = makeSection(specIndex + 1, thisTier, SECTION_WIDTH / 2, branchLength, start, branchEnd, yaw, curvature, parent);
         spec.forkBranch = branch;
         spec.forkGateId = gateId;
         spec.forkParentIndex = parent.index;
@@ -690,16 +743,32 @@ export function generateWorld(gameState: GameState, seed: number = Date.now()): 
       const branchA = mkBranch("a", 1, parent.gates[0].id);
       const branchB = mkBranch("b", -1, parent.gates[1].id);
       // J стыкуется с ПРОДОЛЖАЮЩЕЙ веткой — при настоящей развилке это
-      // произвольно branchA (обе ветки геометрически идентичны по ширине и
-      // курсу, для "ушей"-бордюра в SectionChunk неважно, какую взять); при
-      // тупике — обязательно та, что НЕ тупик (тупиковая до J не дотягивается).
+      // произвольно branchA (обе ветки геометрически равноправны — какую
+      // взять первой, неважно), плюс вторая ветка передаётся отдельным
+      // "вторым швом" (prev2), чтобы «ушной» фикс в SectionChunk прикрыл
+      // ОБЕ разошедшиеся кромки, а не только одну; при тупике — обязательно
+      // та, что НЕ тупик (тупиковая до J не дотягивается, patch2 не нужен).
       const continuingBranch = deadSlot === "a" ? branchB : branchA;
+      const otherBranch = continuingBranch === branchA ? branchB : branchA;
 
-      // Общая секция-схождение: вход J — кромка на конце ПРОДОЛЖАЮЩЕЙ ветки.
+      // Общая секция-схождение: вход J — кромка на конце ПРОДОЛЖАЮЩЕЙ ветки,
+      // на исходной (НЕ согнутой) оси parent'а — это и есть та самая общая
+      // "глубина", на которой встречаются обе разошедшиеся ветки (см. выше).
       const jStart = { x: end.x + dirX * branchLen, z: end.z + dirZ * branchLen };
       const jLength = randRange(rng, SECTION_LENGTH.min, SECTION_LENGTH.max);
       const jEnd = localToWorld({ start: jStart, yaw, curvature: 0 }, 0, jLength);
-      const join = makeSection(specIndex + 2, tier, SECTION_WIDTH, jLength, jStart, jEnd, yaw, 0, continuingBranch);
+      const join = makeSection(
+        specIndex + 2,
+        tier,
+        SECTION_WIDTH,
+        jLength,
+        jStart,
+        jEnd,
+        yaw,
+        0,
+        continuingBranch,
+        deadEnd ? null : otherBranch
+      );
       fillSection(join, false);
       maybeAddSideSpur(join);
 
