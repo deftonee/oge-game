@@ -1,6 +1,8 @@
 import { Scene } from "@babylonjs/core";
 import { SectionChunk } from "./SectionChunk";
-import { WorldSpec, SectionSpec, distPointToSectionAxis } from "./WorldGenerator";
+import type { WorldSpec } from "./spec/WorldSpec";
+import type { SectionSpec } from "./spec/SectionSpec";
+import { distPointToSectionAxis } from "./geometry/SectionGeometry";
 import { GameState } from "../core/GameState";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";

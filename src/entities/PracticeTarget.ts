@@ -6,7 +6,7 @@ import {
   Color3,
   Vector3,
 } from "@babylonjs/core";
-import { PracticeTargetKind } from "../world/WorldGenerator";
+import type { PracticeTargetKind } from "../world/spec/SectionSpec";
 
 /**
  * Статический объект для отработки заклинаний вне боя —

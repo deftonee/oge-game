@@ -1,5 +1,6 @@
 import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Quaternion } from "@babylonjs/core";
-import { WorldSpec, localToWorld } from "./WorldGenerator";
+import type { WorldSpec } from "./spec/WorldSpec";
+import { localToWorld } from "./geometry/SectionGeometry";
 
 /**
  * Туман между последней отрисованной секцией мира и башней (доработка):

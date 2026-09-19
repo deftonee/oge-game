@@ -1,5 +1,6 @@
 import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
-import { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec, localToWorld, yawAt } from "./WorldGenerator";
+import type { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec } from "./spec/SectionSpec";
+import { localToWorld, yawAt } from "./geometry/SectionGeometry";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";

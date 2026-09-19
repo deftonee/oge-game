@@ -1,7 +1,8 @@
 import { ALL_SPELLS } from "../data/spells";
 import { ALL_BOOKS } from "../data/books";
 import { GameState, MAX_MASTERY } from "../core/GameState";
-import type { BorderStyle, ChestSpec, ScatterSeed, SectionSpec } from "./WorldGenerator";
+import type { BorderStyle, ChestSpec, ScatterSeed, SectionSpec } from "./spec/SectionSpec";
+import { pick, randInt, randRange, type RandomFn } from "./math/Rng";
 
 /**
  * «Конструктор секций» — декларативное правило контента секции и его
@@ -68,7 +69,7 @@ export interface SectionContentContext {
 
 export class SectionContentBuilder {
   constructor(
-    private readonly rng: () => number,
+    private readonly rng: RandomFn,
     private readonly gameState: GameState,
     private readonly nextWitchId: () => string,
     private readonly nextChestId: () => string
@@ -216,22 +217,10 @@ export class SectionContentBuilder {
 
 // --- Утилиты ---
 
-function resolveCount(rng: () => number, b: Bounds | undefined, lengthExtra = 0): number {
+function resolveCount(rng: RandomFn, b: Bounds | undefined, lengthExtra = 0): number {
   if (!b) return 0;
   if (b.exact !== undefined) return b.exact;
   return randInt(rng, b.min ?? 0, b.max ?? 0) + lengthExtra;
-}
-
-function randRange(rng: () => number, min: number, max: number): number {
-  return min + rng() * (max - min);
-}
-
-function randInt(rng: () => number, min: number, max: number): number {
-  return Math.floor(randRange(rng, min, max + 1));
-}
-
-function pick<T>(rng: () => number, arr: readonly T[]): T {
-  return arr[Math.floor(rng() * arr.length)];
 }
 
 const PRACTICE_KINDS: readonly ("tree" | "dummy" | "nettle")[] = ["tree", "dummy", "nettle"];
@@ -253,7 +242,7 @@ function uncollectedPageGroups(gameState: GameState): { bookId: string; pageIds:
  */
 const MIN_ENTITY_SPACING = 4.5;
 function pickSpacedPosition(
-  rng: () => number,
+  rng: RandomFn,
   length: number,
   width: number,
   placed: { x: number; z: number }[],
@@ -280,7 +269,7 @@ function pickSpacedPosition(
 }
 
 /** Чем ниже мастерство темы у игрока, тем выше шанс встретить ведьму именно с ней. */
-function pickWeightedByWeakness(rng: () => number, pool: { id: string }[], gameState: GameState): { id: string } {
+function pickWeightedByWeakness(rng: RandomFn, pool: { id: string }[], gameState: GameState): { id: string } {
   const weights = pool.map((s) => MAX_MASTERY + 1 - gameState.getMastery(s.id));
   const total = weights.reduce((a, b) => a + b, 0);
   let roll = rng() * total;
@@ -291,7 +280,7 @@ function pickWeightedByWeakness(rng: () => number, pool: { id: string }[], gameS
   return pool[pool.length - 1];
 }
 
-function generateGrassSeeds(rng: () => number, length: number, width: number, density: number): ScatterSeed[] {
+function generateGrassSeeds(rng: RandomFn, length: number, width: number, density: number): ScatterSeed[] {
   const count = Math.round(length * density);
   const seeds: ScatterSeed[] = [];
   for (let i = 0; i < count; i++) {
@@ -312,7 +301,7 @@ function generateGrassSeeds(rng: () => number, length: number, width: number, de
  * ковёр (как трава). Сейчас чисто декоративны (без коллизии) — то же
  * ограничение, что и у травы/бордюров, до появления самой механики.
  */
-function generateBushSeeds(rng: () => number, length: number, width: number, density: number): ScatterSeed[] {
+function generateBushSeeds(rng: RandomFn, length: number, width: number, density: number): ScatterSeed[] {
   const count = Math.round(length * density);
   const seeds: ScatterSeed[] = [];
   for (let i = 0; i < count; i++) {
@@ -326,7 +315,7 @@ function generateBushSeeds(rng: () => number, length: number, width: number, den
   return seeds;
 }
 
-function generateBorderSeeds(rng: () => number, length: number, x: number, style: BorderStyle): ScatterSeed[] {
+function generateBorderSeeds(rng: RandomFn, length: number, x: number, style: BorderStyle): ScatterSeed[] {
   const seeds: ScatterSeed[] = [];
   // Забор — регулярные столбы почти без пропусков; кусты/скалы — органичнее, с разбросом.
   const [gapMin, gapMax, jitter] = style === "fence" ? [1.6, 2.0, 0.1] : [2, 3.5, 0.25];
