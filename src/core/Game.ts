@@ -10,6 +10,7 @@ import { duelRoundsFor } from "./duelRules";
 import { ProximityDetector } from "../world/proximity";
 import { GameState } from "./GameState";
 import { MobileControls } from "../mobile/MobileControls";
+import { OwlCompanion } from "../entities/OwlCompanion";
 import type { PlayerController } from "./PlayerController";
 import type { WorldStreamer } from "../world/WorldStreamer";
 import type { FogManager } from "../world/FogManager";
@@ -29,6 +30,7 @@ export class Game {
   private readonly cooldown: EncounterCooldown;
   private readonly proximity: ProximityDetector;
   private readonly mobile: MobileControls;
+  private readonly owl: OwlCompanion;
   private readonly anyMenuOpen: () => boolean;
   private readonly duelRoundsToWin: () => number;
 
@@ -50,6 +52,7 @@ export class Game {
     const player = createPlayer(scene, spawnPoint);
     this.player = player;
     this.camera = createOrbitCamera(scene, canvas, player);
+    this.owl = new OwlCompanion(scene, player.position);
 
     const managers = createManagers(uiRoot, gameState, cooldown);
 
@@ -130,7 +133,7 @@ export class Game {
   }
 
   private startRenderLoop(): void {
-    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile } = this;
+    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl } = this;
 
     engine.runRenderLoop(() => {
       const dt = engine.getDeltaTime() / 1000;
@@ -146,6 +149,10 @@ export class Game {
       const forward = camera.getDirection(Vector3.Forward());
       const right = camera.getDirection(Vector3.Right());
       player.update(dt, forward, right);
+
+      // Сова летит по орбите вокруг игрока; пересчитываем ПОСЛЕ player.update,
+      // чтобы целевая позиция брала уже обновлённую точку.
+      owl.update(dt, player.position);
 
       // Камера мягко следует за игроком.
       camera.target = Vector3.Lerp(camera.target, player.position, Math.min(1, dt * 8));
@@ -163,5 +170,6 @@ export class Game {
 
   public dispose(): void {
     this.engine.stopRenderLoop();
+    this.owl.dispose();
   }
 }

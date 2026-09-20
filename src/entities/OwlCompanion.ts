@@ -8,26 +8,33 @@ import {
 } from "@babylonjs/core";
 
 export interface OwlCompanionOptions {
-  /** Позиция совы относительно игрока. */
-  offset?: Vector3;
+  /** Радиус орбиты вокруг игрока (м). */
+  orbitRadius?: number;
+  /** Скорость облёта (рад/с). */
+  orbitSpeed?: number;
+  /** Высота полёта над точкой спавна игрока (м) — над головой. */
+  height?: number;
   /** Скорость, с которой сова догоняет целевую позицию. */
   followSpeed?: number;
-  /** Высота полёта относительно игрока. */
-  height?: number;
 }
 
 /**
- * Сова-помощник.
+ * Сова-помощник. Летает по круговой орбите над головой игрока.
  *
- * Она не является частью WorldStreamer: её жизненный цикл принадлежит
- * игровому миру и она постоянно следует за игроком.
+ * Не является частью WorldStreamer: её жизненный цикл принадлежит
+ * игровому миру, она постоянно следует за игроком. В update() передаём
+ * текущую позицию игрока и deltaTime — сова вычисляет целевую точку на
+ * орбите и плавно (exponential lerp) догоняет её, плюс лёгкий bank/bob
+ * делают её визуально живой без отдельной AnimationGroup.
  */
 export class OwlCompanion {
   public readonly root: TransformNode;
-  private readonly target = new Vector3();
-  private readonly offset: Vector3;
-  private readonly followSpeed: number;
+  private readonly orbitRadius: number;
+  private readonly orbitSpeed: number;
   private readonly height: number;
+  private readonly followSpeed: number;
+  private readonly target = new Vector3();
+  private angle: number;
   private time = 0;
 
   constructor(
@@ -35,11 +42,21 @@ export class OwlCompanion {
     playerPosition: Vector3,
     options: OwlCompanionOptions = {},
   ) {
-    this.offset = options.offset?.clone() ?? new Vector3(-1.6, 1.7, 1.4);
-    this.followSpeed = options.followSpeed ?? 4.5;
-    this.height = options.height ?? 1.7;
+    this.orbitRadius = options.orbitRadius ?? 1.4;
+    this.orbitSpeed = options.orbitSpeed ?? 1.6;
+    this.height = options.height ?? 2.1;
+    this.followSpeed = options.followSpeed ?? 6.0;
+    // Стартовый угол — чтобы сова появилась СЗАДИ-сбоку, а не ровно в лицо.
+    this.angle = Math.PI * 0.8;
+
     this.root = this.buildModel();
-    this.root.position.copyFrom(playerPosition).addInPlace(this.offset);
+    this.root.position.copyFrom(playerPosition).addInPlace(new Vector3(
+      Math.cos(this.angle) * this.orbitRadius,
+      this.height,
+      Math.sin(this.angle) * this.orbitRadius,
+    ));
+    // Смотрим вдоль вектора полёта по касательной к орбите.
+    this.root.rotation.y = Math.PI - this.angle;
   }
 
   private buildModel(): TransformNode {
@@ -113,24 +130,28 @@ export class OwlCompanion {
   }
 
   /**
-   * Вызывай один раз за кадр после обновления позиции игрока.
+   * Вызывай каждый кадр после обновления позиции игрока.
    * deltaTime — секунды между кадрами.
    */
   public update(deltaTime: number, playerPosition: Vector3): void {
     this.time += Math.max(0, deltaTime);
+    this.angle += this.orbitSpeed * Math.max(0, deltaTime);
+    if (this.angle > Math.PI * 2) this.angle -= Math.PI * 2;
 
-    this.target.copyFrom(playerPosition);
-    this.target.x += this.offset.x;
-    this.target.z += this.offset.z;
-    this.target.y += this.height + Math.sin(this.time * 3.0) * 0.12;
+    const bob = Math.sin(this.time * 3.0) * 0.12;
+    this.target.set(
+      playerPosition.x + Math.cos(this.angle) * this.orbitRadius,
+      playerPosition.y + this.height + bob,
+      playerPosition.z + Math.sin(this.angle) * this.orbitRadius,
+    );
 
+    // Плавная погоня за целевой точкой орбиты — без рывков при телепортах.
     const factor = 1 - Math.exp(-this.followSpeed * Math.max(0, deltaTime));
     Vector3.LerpToRef(this.root.position, this.target, factor, this.root.position);
 
-    // Лёгкое покачивание крыльев/тела делает сову визуально "живой"
-    // даже без отдельной AnimationGroup.
+    // Сова смотрит вдоль касательной к орбите; лёгкое покачивание крыльев.
+    this.root.rotation.y = Math.PI - this.angle;
     this.root.rotation.z = Math.sin(this.time * 4.5) * 0.04;
-    this.root.rotation.y = Math.sin(this.time * 1.4) * 0.08;
   }
 
   public dispose(): void {
