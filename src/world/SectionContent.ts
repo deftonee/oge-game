@@ -207,9 +207,11 @@ export class SectionContentBuilder {
     // --- Декор: трава, кусты и бордюры по стилю секции. ---
     // Плотность травы ×7 от прежней (3.2 → 22.4 сидов/м) — по ТЗ: "почаще".
     spec.grass = generateGrassSeeds(this.rng, length, width, merged.grassDensity ?? 22.4);
-    // Кусты — заметно реже травы (отдельные ориентиры/будущие укрытия, а не
-    // ковёр) и крупнее — см. generateBushSeeds и SectionChunk.buildScatter.
-    spec.bushes = generateBushSeeds(this.rng, length, width, merged.bushDensity ?? 0.15);
+    // Кусты — заметно реже травы (отдельные ориентиры/укрытия, а не ковёр).
+    // Подняли до 0.35 + min count в generateBushSeeds, чтобы на коротких
+    // секциях было хотя бы 2 куста, а в средних (length 50) — 17 видимых
+    // объектов. См. generateBushSeeds и SectionChunk.buildScatter.
+    spec.bushes = generateBushSeeds(this.rng, length, width, merged.bushDensity ?? 0.35);
     spec.borderLeft = generateBorderSeeds(this.rng, length, -(width / 2 - 0.4), spec.borderStyle);
     spec.borderRight = generateBorderSeeds(this.rng, length, width / 2 - 0.4, spec.borderStyle);
   }
@@ -295,21 +297,29 @@ function generateGrassSeeds(rng: RandomFn, length: number, width: number, densit
 }
 
 /**
- * Кусты внутри проходимой ширины (не бордюрные) — задел под будущую
- * механику пряток игрока: расставлены РЕДКО и с бОльшим случайным
- * масштабом, чтобы читаться как отдельные укрытия-ориентиры, а не как
- * ковёр (как трава). Сейчас чисто декоративны (без коллизии) — то же
- * ограничение, что и у травы/бордюров, до появления самой механики.
+ * Кусты внутри проходимой ширины (не бордюрные) — крупные укрытия (1.5× игрока),
+ * за которые можно спрятаться от орбитальной камеры. Расставлены РЕДКО и
+ * разномасштабно, чтобы читаться как отдельные ориентиры, а не как ковёр.
+ * Без коллизии — игрок ходит сквозь (декоративное укрытие, физика пряток
+ * не реализована).
  */
 function generateBushSeeds(rng: RandomFn, length: number, width: number, density: number): ScatterSeed[] {
-  const count = Math.round(length * density);
+  // Гарантируем хотя бы 1 куст на каждые 4 м секции — иначе в короткой секции
+  // (length≈12, density 0.35 → count=4) можно вообще не дойти до укрытия, и
+  // кусты визуально "теряются" среди травы, даже если они есть в инспекторе.
+  const count = Math.max(2, Math.round(length * density));
   const seeds: ScatterSeed[] = [];
   for (let i = 0; i < count; i++) {
     seeds.push({
-      x: randRange(rng, -(width / 2 - 0.9), width / 2 - 0.9),
-      z: randRange(rng, 0, length),
+      // Сильнее смещаем к центру, чтобы кусты стояли в проходимой зоне,
+      // а не прятались под бордюрными стенами (раньше диапазон был шире,
+      // и часть кустов генерировалась НА бордюре и сливалась с ним).
+      x: randRange(rng, -(width / 2 - 1.4), width / 2 - 1.4),
+      z: randRange(rng, 0.5, length - 0.5),
       rot: randRange(rng, 0, Math.PI * 2),
-      scale: randRange(rng, 0.85, 1.5),
+      // Минимальный scale 1.1 при diameter 2.4 → высота 2.64 м, т.е. гарантированно
+      // ВЫШЕ игрока (1.8 м). Верхняя граница 1.6 → 3.84 м (заметный объект).
+      scale: randRange(rng, 1.1, 1.6),
     });
   }
   return seeds;

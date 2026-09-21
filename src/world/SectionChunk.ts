@@ -1,4 +1,4 @@
-import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
+import { Scene, Mesh, MeshBuilder, ExtrudeShape, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
 import type { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec } from "./spec/SectionSpec";
 import { localToWorld, yawAt } from "./geometry/SectionGeometry";
 import { Witch } from "../entities/Witch";
@@ -89,6 +89,10 @@ export class SectionChunk {
     this.buildWalls(wallMat);
     this.buildPartition(wallMat);
     this.buildJointPatch();
+    this.buildDeadEndCap(wallMat);
+    this.buildSpawnCap(wallMat);
+    this.buildApproachCap(wallMat);
+    this.buildSeam(wallMat);
     this.buildSideSpursEnvironment(wallMat);
     this.buildScatter(this.spec.grass, "grass");
     this.buildScatter(this.spec.bushes, "bush");
@@ -112,7 +116,9 @@ export class SectionChunk {
   /** Длина одного шага дискретизации дуги (м) — компромисс гладкости/полигонажа. */
   private static readonly CURVE_SEGMENT_LENGTH = 2.5;
   private static readonly WALL_HEIGHT = 2.5;
+  private static readonly WALL_DEPTH = 0.3;
   private static readonly WALL_COLOR = "#4a4d52";
+  private static readonly SEAM_RAIL_COLOR = "#8a8f98";
 
   private curveSteps(): number {
     return Math.max(1, Math.round(this.spec.length / SectionChunk.CURVE_SEGMENT_LENGTH));
@@ -200,14 +206,24 @@ export class SectionChunk {
     const buildSide = (localX: number, side: "left" | "right", tag: string) => {
       const segments = this.wallSegments(side);
       segments.forEach((seg, i) => {
-        const wall = MeshBuilder.CreateRibbon(
+        // Видимая стена — единый ТОЛСТЫЙ объём вдоль дуги (ExtrudeShape с
+        // прямоугольным профилем). Backface-culling (FRONTSIDE) прячет дальнюю
+        // грань — виден один слой с реальной толщиной, как у боксов. Толстый
+        // коллайдер надёжно держит эллипсоид, наружу не выносит.
+        const outerX = side === "left" ? localX - SectionChunk.WALL_DEPTH : localX + SectionChunk.WALL_DEPTH;
+        const shape = [
+          new Vector3(localX, 0, 0),
+          new Vector3(outerX, 0, 0),
+          new Vector3(outerX, h, 0),
+          new Vector3(localX, h, 0),
+        ];
+        const wall = ExtrudeShape(
           `wall${tag}_${this.spec.index}_${i}`,
           {
-            pathArray: [
-              this.curvePathRange(localX, 0, seg.start, seg.end),
-              this.curvePathRange(localX, h, seg.start, seg.end),
-            ],
-            sideOrientation: Mesh.DOUBLESIDE,
+            shape,
+            path: this.curvePathRange(0, 0, seg.start, seg.end),
+            cap: Mesh.CAP_ALL,
+            sideOrientation: Mesh.FRONTSIDE,
           },
           this.scene
         );
@@ -332,7 +348,208 @@ export class SectionChunk {
         }
         this.disposables.push(eMat);
       }
+
+      // --- перемычки по кромке входа ШИРОКОЙ секции ---
+      // Обратный случай «ушей»: ТЕКУЩАЯ секция шире предыдущей (напр. первая
+      // широкая секция 24 м после стартовой 8 м, либо J/широкая после веток).
+      // Пол текущей у кромки входа выступает за покрытие узкой — «хвост»
+      // [prevMax..half] от стены узкой до стены широкой, стоящих на общей
+      // границе, остаётся открытым в бездну у стыка. Закрываем его
+      // ПОЛНОВЫСОТНОЙ стеной в плоскости входа: от края покрытия prev до
+      // собственной боковой стены текущей, оставляя центральный проём.
+      // (prevMin/prevMax — уже объединённое покрытие, включая prev2 для J.)
+      const overshoots: { center: number; halfLen: number }[] = [];
+      const overLeft = prevMin - curMin; // текущая торчит левее покрытия prev
+      if (overLeft > 0.35) overshoots.push({ center: (curMin + prevMin) / 2, halfLen: overLeft / 2 });
+      const overRight = curMax - prevMax; // текущая торчит правее покрытия prev
+      if (overRight > 0.35) overshoots.push({ center: (prevMax + curMax) / 2, halfLen: overRight / 2 });
+
+      if (overshoots.length > 0) {
+        const pMat = this.makeMaterial(`jointRailMat_${spec.index}`, "#8a8f98");
+        for (const os of overshoots) {
+          const seg = MeshBuilder.CreateBox(
+            `jointRail_${spec.index}_${os.center >= 0 ? "r" : "l"}`,
+            { width: Math.max(0.3, os.halfLen * 2), height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
+            this.scene
+          );
+          seg.material = pMat;
+          seg.rotation.y = spec.yaw;
+          seg.position.set(
+            spec.start.x + perpCX * os.center,
+            SectionChunk.WALL_HEIGHT / 2,
+            spec.start.z + perpCZ * os.center
+          );
+          seg.checkCollisions = true;
+          this.disposables.push(seg);
+        }
+        this.disposables.push(pMat);
+      }
     }
+  }
+
+  /**
+   * Торцевая стена тупиковой ветки развилки: за её торцом бездна — ветка ни с
+   * чем не стыкуется (у ниш аналогичная крышка уже есть — spurCap). Прямой
+   * бокс по торцу на конечном курсе ветки: тупик короткий, кривизна мала.
+   */
+  private buildDeadEndCap(wallMat: StandardMaterial): void {
+    if (!this.spec.isDeadEnd) return;
+    this.buildEndCap(wallMat, "branchCap", this.spec.length + 0.15);
+  }
+
+  /**
+   * Торцевая стена за входом ПЕРВОЙ секции (спавн): игрок не должен уйти
+   * назад за пределы мира — там пола нет.
+   */
+  private buildSpawnCap(wallMat: StandardMaterial): void {
+    if (this.spec.index !== 0) return;
+    this.buildEndCap(wallMat, "spawnCap", -0.15);
+  }
+
+  /**
+   * Фланги по фронту СЕКЦИИ ПОДХОДА к башне (tier 0): пол там 3× ширины, а
+   * башня (радиус ~2) стоит в центре в 2 м за кромкой — с флангов игрок мог бы
+   * обойти её и упасть с кромки в бездну. Закрываем полосы по бокам, оставляя
+   * центральный проём под башню (диаметр 4 + запас).
+   */
+  private buildApproachCap(wallMat: StandardMaterial): void {
+    if (this.spec.tier !== 0) return;
+    const half = this.spec.width / 2;
+    const gapHalf = 3;
+    if (half <= gapHalf) return;
+    const yaw = this.spec.yaw + this.spec.curvature * this.spec.length;
+    const z = this.spec.length + 0.3;
+    const flank = (localXc: number, w: number, tag: string) => {
+      const c = this.toWorld(localXc, z);
+      const wall = MeshBuilder.CreateBox(
+        `approachFlank_${this.spec.index}_${tag}`,
+        { width: w, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
+        this.scene
+      );
+      wall.position.set(c.x, SectionChunk.WALL_HEIGHT / 2, c.z);
+      wall.rotation.y = yaw;
+      wall.material = wallMat;
+      wall.checkCollisions = true;
+      this.disposables.push(wall);
+    };
+    flank(-(half + gapHalf) / 2, half - gapHalf, "L");
+    flank((half + gapHalf) / 2, half - gapHalf, "R");
+  }
+
+  private buildEndCap(wallMat: StandardMaterial, name: string, zLocal: number): void {
+    const endYaw = this.spec.yaw + this.spec.curvature * this.spec.length;
+    const capCenter = this.toWorld(0, zLocal);
+    const cap = MeshBuilder.CreateBox(
+      `${name}_${this.spec.index}`,
+      { width: this.spec.width + 0.2, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
+      this.scene
+    );
+    cap.position.set(capCenter.x, SectionChunk.WALL_HEIGHT / 2, capCenter.z);
+    cap.rotation.y = endYaw;
+    cap.material = wallMat;
+    cap.checkCollisions = true;
+    this.disposables.push(cap);
+  }
+
+  /**
+   * Геометрия шва «ветки → схождение» (spec.seam) — см. TrackBuilder.computeSeam.
+   * Заплата пола — лента между торцевой кромкой ветки (edgeA—edgeB) и линией
+   * входа J (lineA—lineB, нахлёст 0.5 м на пол J). Ограждение — если внешний
+   * угол кромки торчит за ширину J: перила по косому краю + продолжение стены
+   * J назад (закрывает «язык» пола ветки, за которым бездна). Задняя стена J —
+   * на линии входа в зазорах между проёмами веток (за кромками веток бездна).
+   */
+  private buildSeam(wallMat: StandardMaterial): void {
+    const seam = this.spec.seam;
+    if (!seam) return;
+    const jYaw = this.spec.yaw;
+    const J_HALF = this.spec.width / 2;
+    const WALL_H = SectionChunk.WALL_HEIGHT;
+    const RAIL_H = 1.0;
+    const mat = this.makeMaterial(`seamMat_${this.spec.index}`, SectionChunk.SEAM_RAIL_COLOR);
+    const toV3 = (p: { x: number; z: number }, y: number): Vector3 => {
+      const w = localToWorld(this.spec, p.x, p.z);
+      return new Vector3(w.x, y, w.z);
+    };
+
+    for (const patch of seam.patches) {
+      // Пол-заплата: лента из двух образующих (торец ветки → линия входа J).
+      const floor = MeshBuilder.CreateRibbon(
+        `seamFloor_${this.spec.index}_${patch.edgeA.x.toFixed(1)}_${patch.edgeB.x.toFixed(1)}`,
+        {
+          pathArray: [
+            [toV3(patch.edgeA, 0.02), toV3(patch.edgeB, 0.02)],
+            [toV3(patch.lineA, 0.02), toV3(patch.lineB, 0.02)],
+          ],
+          sideOrientation: Mesh.DOUBLESIDE,
+        },
+        this.scene
+      );
+      const floorMat = this.makeMaterial(`seamFloorMat_${this.spec.index}`, patch.color);
+      floor.material = floorMat;
+      floor.checkCollisions = true;
+      this.disposables.push(floor, floorMat);
+
+      // Ограждение: внешний угол за шириной J — перила вдоль косого края
+      // (от внешнего угла кромки до его проекции на стену J) + отрезок стены
+      // J от точки входа внешнего угла назад вдоль стены.
+      if (patch.outerCorner) {
+        const oc = patch.outerCorner;
+        const clampX = Math.sign(oc.x) * J_HALF;
+        // Уровень стены J, на котором кромка ветки её пересекает: z при x=±J_HALF.
+        const edge = [patch.edgeA, patch.edgeB];
+        const edgeX = edge[1].x - edge[0].x;
+        const edgeZ = edge[1].z - edge[0].z;
+        const tWall = (clampX - edge[0].x) / edgeX;
+        const zWall = edge[0].z + edgeZ * tWall;
+        // Перила: бокс между внешним углом кромки и стеной J — через CreateBox
+        // с шириной = зазор; направление отверстия уже вдоль оси X (перила
+        // перпендикулярны стене J, наклон кромки компенсируется тем, что зазор
+        // проецируется на X).
+        const rail = MeshBuilder.CreateBox(
+          `seamRail_${this.spec.index}_${oc.x > 0 ? "e" : "w"}`,
+          { width: Math.abs(oc.x - clampX), height: RAIL_H, depth: 0.25 },
+          this.scene
+        );
+        const rc = toV3({ x: (oc.x + clampX) / 2, z: (oc.z + zWall) / 2 }, RAIL_H / 2);
+        rail.position.set(rc.x, RAIL_H / 2, rc.z);
+        rail.rotation.y = jYaw + (oc.x > 0 ? Math.PI / 2 : -Math.PI / 2); // вдоль оси «поперёк J»
+        rail.material = mat;
+        rail.checkCollisions = true;
+        this.disposables.push(rail);
+        // Отрезок стены J от пересечения назад: точка (clampX, zWall) — уже на оси стены J.
+        if (zWall < -0.05) {
+          const wallBack = MeshBuilder.CreateBox(
+            `seamWallBack_${this.spec.index}_${oc.x > 0 ? "e" : "w"}`,
+            { width: 0.3, height: WALL_H, depth: Math.abs(zWall) },
+            this.scene
+          );
+          const wbCenter = toV3({ x: clampX, z: zWall / 2 }, WALL_H / 2);
+          wallBack.position.set(wbCenter.x, WALL_H / 2, wbCenter.z);
+          wallBack.rotation.y = jYaw;
+          wallBack.material = wallMat;
+          wallBack.checkCollisions = true;
+          this.disposables.push(wallBack);
+        }
+      }
+    }
+
+    // Задняя стена J: зазоры линии входа между проёмами веток.
+    for (let i = 0; i < seam.backWalls.length; i++) {
+      const bw = seam.backWalls[i];
+      const from = bw.from;
+      const to = bw.to;
+      const len = Math.hypot(to.x - from.x, to.z - from.z);
+      const c = toV3({ x: (from.x + to.x) / 2, z: 0.15 }, 0);
+      const wall = MeshBuilder.CreateBox(`seamBack_${this.spec.index}_${i}`, { width: len, height: WALL_H, depth: 0.3 }, this.scene);
+      wall.position.set(c.x, WALL_H / 2, c.z);
+      wall.rotation.y = jYaw;
+      wall.material = wallMat;
+      wall.checkCollisions = true;
+      this.disposables.push(wall);
+    }
+
+    this.disposables.push(mat);
   }
 
   /**
@@ -415,18 +632,26 @@ export class SectionChunk {
   private buildScatter(seeds: ScatterSeed[], kind: "grass" | "bush"): void {
     if (seeds.length === 0) return;
 
-    const mat = this.makeMaterial(`${kind}Mat_${this.spec.index}`, kind === "bush" ? "#2f5b34" : "#5fae4a");
+    const mat = this.makeMaterial(`${kind}Mat_${this.spec.index}`, kind === "bush" ? "#1f3d22" : "#5fae4a");
+    // Делаем куст чуть матовым — глянец травы не должен "забивать" их на фоне.
+    if (kind === "bush") {
+      mat.specularColor = new Color3(0.05, 0.05, 0.05);
+      mat.specularPower = 32;
+    }
 
+    // Кусты — крупные укрытия ≈1.5× игрока (игрок 1.8 м, куст 2.04–3.6 м при
+    // scale 0.85–1.5). baseY = радиус для среднего scale — стыковка с землёй
+    // доведена в scatterInstances через worldY = baseY * s.scale (см. ниже).
     const base =
       kind === "bush"
-        ? MeshBuilder.CreateSphere(`${kind}_${this.spec.index}`, { diameter: 1.1, segments: 6 }, this.scene)
+        ? MeshBuilder.CreateSphere(`${kind}_${this.spec.index}`, { diameter: 2.4, segments: 6 }, this.scene)
         : MeshBuilder.CreateCylinder(
             `${kind}_${this.spec.index}`,
             { diameterTop: 0, diameterBottom: 0.18, height: 0.4 },
             this.scene
           );
     base.material = mat;
-    this.scatterInstances(base, seeds, kind === "bush" ? 0.45 : 0.2);
+    this.scatterInstances(base, seeds, kind === "bush" ? 1.2 : 0.2);
     this.disposables.push(base, mat);
   }
 
@@ -447,8 +672,8 @@ export class SectionChunk {
     let color: string;
     if (style === "bushes") {
       color = "#2f5b34";
-      base = MeshBuilder.CreateSphere(`border${side}_${this.spec.index}`, { diameter: 1.1, segments: 6 }, this.scene);
-      baseY = 0.45;
+      base = MeshBuilder.CreateSphere(`border${side}_${this.spec.index}`, { diameter: 2.4, segments: 6 }, this.scene);
+      baseY = 1.2;
     } else if (style === "fence") {
       color = "#8a8f98";
       base = MeshBuilder.CreateBox(`border${side}_${this.spec.index}`, { width: 0.12, height: 1.3, depth: 0.12 }, this.scene);
@@ -465,15 +690,39 @@ export class SectionChunk {
     this.disposables.push(base, mat);
   }
 
-  /** Общий хелпер: раскладывает сиды как тонкие инстансы заданного базового меша. */
+  /**
+   * Общий хелпер: раскладывает сиды как тонкие инстансы заданного базового меша.
+   *
+   * ВАЖНО: y центра = baseY * s.scale — масштабируется вместе с инстансом,
+   * иначе при scale > 1 куст/столб «всплывают» над землёй, а при scale < 1
+   * зарываются в пол (раньше трава качалась на ±6 см, бордюрные кусты были
+   * наполовину в полу — отсюда жалоба «кустов не видно»). Базовые меши
+   * сконструированы так, что низ лежит на y=0 при canonical-масштабе.
+   */
   private scatterInstances(base: Mesh, seeds: ScatterSeed[], baseY: number): void {
+    // Кусты и бордюрный декор — ПОЛНЫЕ instances (createInstance), не thin:
+    // их единицы на секцию, thin-инстансинг в рантайме не отрисовывал их
+    // (баг не локализован, а полные instance копируют проверенный путь ведьм).
+    // Трава остаётся на thin (сотни окты на секцию, один draw call).
+    if (base.name.startsWith("bush") || base.name.startsWith("borderb") || base.name.startsWith("borderL") || base.name.startsWith("borderR")) {
+      for (const s of seeds) {
+        const world = this.toWorld(s.x, s.z);
+        const inst = base.createInstance(`${base.name}_i${base.instances.length}`);
+        inst.position.set(world.x, baseY * s.scale, world.z);
+        inst.scaling.setAll(s.scale);
+        inst.rotation.y = this.spec.yaw + s.rot;
+        this.disposables.push(inst);
+      }
+      base.isVisible = false; // рендерятся только инстансы; база — источник геометрии
+      return;
+    }
     for (let i = 0; i < seeds.length; i++) {
       const s = seeds[i];
       const world = this.toWorld(s.x, s.z);
       const matrix = Matrix.Compose(
         new Vector3(s.scale, s.scale, s.scale),
         Quaternion.RotationAxis(Vector3.Up(), this.spec.yaw + s.rot),
-        new Vector3(world.x, baseY, world.z)
+        new Vector3(world.x, baseY * s.scale, world.z)
       );
       base.thinInstanceAdd(matrix, false);
     }

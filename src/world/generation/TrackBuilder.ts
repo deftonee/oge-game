@@ -1,6 +1,6 @@
 import { getSpellsBySchool } from "../../data/spells";
 import type { GameState } from "../../core/GameState";
-import type { SectionSpec } from "../spec/SectionSpec";
+import type { SectionSpec, SeamSpec, SeamPatchSpec } from "../spec/SectionSpec";
 import type { TrackSnapshot } from "../spec/WorldSpec";
 import type { Vec2 } from "../geometry/SectionGeometry";
 import { clamp, localToWorld } from "../geometry/SectionGeometry";
@@ -255,6 +255,7 @@ export class TrackBuilder {
       continuingBranch,
       deadEnd ? null : otherBranch
     );
+    join.seam = this.computeSeam(jStart, [branchA, branchB], deadSlot);
     this.assemble(join, false);
 
     this.prevSpec = join;
@@ -262,6 +263,141 @@ export class TrackBuilder {
     this.currentSpecIndex += 3;
     this.worldCount += 2; // parent + J — две стволовые позиции
     return [parent, branchA, branchB, join];
+  }
+
+  /**
+   * Шов «ветки → схождение J»: чистая геометрия БЕЗ rng (порядок rng-вызовов
+   * appendFork не меняется — детерминизм мира сохраняется).
+   *
+   * Координаты шва — ЛОКАЛЬНЫЕ координаты J (x поперёк, z вдоль, вход J —
+   * линия z=0 через jStart). Ветка — расходящаяся дуга: её торцевая кромка
+   * наклонена к входу J, внешний угол висит перед линией входа (z<0 — дыра),
+   * внутренний — заходит внутрь J (там перекрывается полом J). Заплата —
+   * четырёхугольник между кромкой (обрезанной по ширине J) и линией входа,
+   * с нахлёстом 0.5 м на пол J.
+   */
+  private computeSeam(jStart: Vec2, branches: SectionSpec[], deadSlot: "a" | "b" | null): SeamSpec {
+    const patches: SeamPatchSpec[] = [];
+    const backWalls: { from: Vec2; to: Vec2 }[] = [];
+    // Направление входа в J = курс веток на входе (= yaw родителя на стыке).
+    const yawJ = branches[0].yaw;
+    const cosY = Math.cos(yawJ);
+    const sinY = Math.sin(yawJ);
+    // В J-локальные: dx,dz от jStart.
+    const toLocal = (p: Vec2): Vec2 => {
+      const dx = p.x - jStart.x;
+      const dz = p.z - jStart.z;
+      return { x: dx * cosY - dz * sinY, z: dx * sinY + dz * cosY };
+    };
+
+    // Проёмы веток в линии входа J (для задней стены между ними).
+    const openings: { from: number; to: number }[] = [];
+
+    for (const spec of branches) {
+      // Тупиковая ветка к J не примыкает (её торец в стороне, перед ним —
+      // пол родительского коридора развилки... нет: пустота) — заплаты нет;
+      // её торец закрывается торцевой стеной в её собственном чанке
+      // (SectionChunk.buildEnvironment, spec.isDeadEnd).
+      const isDead = deadSlot !== null && spec.forkBranch === deadSlot;
+      if (isDead) continue;
+      // Торец ветки — spec.end + кромка ±half перпендикулярно конечному курсу.
+      const endYaw = spec.yaw + spec.curvature * spec.length;
+      const perpX = Math.cos(endYaw);
+      const perpZ = -Math.sin(endYaw);
+      const half = spec.width / 2;
+      const edge = [
+        toLocal({ x: spec.end.x - perpX * half, z: spec.end.z - perpZ * half }),
+        toLocal({ x: spec.end.x + perpX * half, z: spec.end.z + perpZ * half }),
+      ];
+
+      // Параметризация кромки p(t) = edge0 + t*(edge1-edge0), t∈[0,1].
+      // Пересечение с линией входа z=0 → t0; с шириной J |x|=J_HALF → t1,t2.
+      const edgeX = edge[1].x - edge[0].x;
+      const edgeZ = edge[1].z - edge[0].z;
+      const J_HALF = SECTION_WIDTH / 2;
+      const crossZ0 = edge[0].z;
+      const crossZ1 = edge[1].z;
+      if (Math.abs(crossZ0 - crossZ1) < 1e-9 && Math.abs(crossZ0) < 1e-9) {
+        continue; // кромка ровно на входе J — шов не нужен
+      }
+      // t пересечения с |x|=J_HALF.
+      const tAt = (xLevel: number) => (xLevel - edge[0].x) / edgeX;
+      const tLeft = tAt(-J_HALF);
+      const tRight = tAt(J_HALF);
+
+      const at = (t: number) => ({ x: edge[0].x + edgeX * t, z: edge[0].z + edgeZ * t });
+      // Клампим кромку по ДВУМ условиям: ширина J (|x|≤J_HALF) и линия входа
+      // (z≤0 — часть кромки внутри J уже перекрыта её полом). Строим запла-
+      // ту только под сегментом, который реально висит перед входом (z<0);
+      // сегмент с z>0 перекрыт полом J — убираем из заплатки и из проёма.
+      const CROSS = -1e-6; // z-уровень сегмента, который считается «висящим»
+      const tZeros: number[] = [0, 1];
+      if (edgeZ !== 0) {
+        const tZero = -edge[0].z / edgeZ;
+        if (tZero > 0 && tZero < 1) tZeros.push(tZero);
+      }
+      // Разбиваем кромку на сегменты [t_i, t_{i+1}], оставляем висящие (z<0).
+      const tSorted = tZeros.slice().sort((p, q) => p - q);
+      const hanging: { from: number; to: number }[] = [];
+      for (let i = 0; i < tSorted.length - 1; i++) {
+        const tm = (tSorted[i] + tSorted[i + 1]) / 2;
+        if (edge[0].z + edgeZ * tm < CROSS) hanging.push({ from: tSorted[i], to: tSorted[i + 1] });
+      }
+      // loT/hiT — пересечение висящего диапазона с [loWidthT, hiWidthT].
+      const loWidthT = Math.max(0, Math.min(tLeft, tRight));
+      const hiWidthT = Math.min(1, Math.max(tLeft, tRight));
+      if (hiWidthT <= loWidthT + 1e-9) continue; // кромка полностью за шириной J
+      let segLo = Infinity;
+      let segHi = -Infinity;
+      for (const seg of hanging) {
+        segLo = Math.min(segLo, seg.from);
+        segHi = Math.max(segHi, seg.to);
+      }
+      if (segHi === -Infinity || segHi <= segLo + 1e-9) continue; // вся кромка внутри J — шов не нужен
+      const loT = Math.max(segLo, loWidthT);
+      const hiT = Math.min(segHi, hiWidthT);
+      if (hiT <= loT + 1e-9) continue; // висящее — вне ширины J: только ограждение
+      const a = at(loT);
+      const b = at(hiT);
+      // Нахлёст на пол J: 0.5 м вглубь. Линия входа под каждым краем — та же x.
+      const OVERLAP = 0.5;
+      const lineA = { x: a.x, z: OVERLAP };
+      const lineB = { x: b.x, z: OVERLAP };
+
+      // Внешний угол кромки за шириной J — для ограждений (перила+стена J назад).
+      const outerCandidate = loT > 0 ? edge[0] : hiT < 1 ? edge[1] : null;
+      const outerCorner = outerCandidate && Math.abs(outerCandidate.x) > J_HALF + 1e-6 ? outerCandidate : null;
+
+      patches.push({
+        color: spec.color,
+        edgeA: a,
+        edgeB: b,
+        lineA,
+        lineB,
+        outerCorner,
+      });
+
+      // Проём ветки в линии входа J — проекция обрезанной кромки на z=0.
+      openings.push({ from: Math.min(a.x, b.x), to: Math.max(a.x, b.x) });
+    }
+
+    // Задняя стена J: линия входа минус проёмы веток. Сортируем проёмы и
+    // строим стены в зазорах — они закрывают бездну между ветками (там, где
+    // кромки обеих веток висят перед входом J).
+    openings.sort((p, q) => p.from - q.from);
+    const J_HALF2 = SECTION_WIDTH / 2;
+    let cursorX = -J_HALF2;
+    for (const op of openings) {
+      if (op.from - cursorX > 0.05) {
+        backWalls.push({ from: { x: cursorX, z: 0 }, to: { x: op.from, z: 0 } });
+      }
+      cursorX = Math.max(cursorX, op.to);
+    }
+    if (J_HALF2 - cursorX > 0.05) {
+      backWalls.push({ from: { x: cursorX, z: 0 }, to: { x: J_HALF2, z: 0 } });
+    }
+
+    return { patches, backWalls };
   }
 
   /**
