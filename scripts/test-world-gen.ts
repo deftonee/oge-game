@@ -3,11 +3,14 @@ import {
   localToWorld,
   distPointToSegment,
   yawAt,
+  subtractInterval,
   FIRST_SECTION_WIDTH,
   SECTION_WIDTH,
   DEADEND_LENGTH,
   FORK_BRANCH_LENGTH,
   FORK_DIVERGENCE_ANGLE,
+  FORK_GATE_FRACTION,
+  GATE_WALL_OVERLAP,
   SIDE_SPUR_WIDTH,
   SIDE_SPUR_LENGTH,
   SIDE_SPUR_MARGIN,
@@ -160,7 +163,11 @@ for (let seed = 1; seed <= 200; seed++) {
     if (s.gates.length === 1) {
       const g = s.gates[0];
       check(g.schoolId !== null, `seed ${seed}: ворота должны иметь школу`);
-      check(Math.abs(g.x) < 1e-9 && Math.abs(g.width - (s.width - 0.4)) < 1e-9, `seed ${seed}: геометрия одиночных ворот`);
+      check(Math.abs(g.x) < 1e-9 && Math.abs(g.width - (s.width + GATE_WALL_OVERLAP)) < 1e-9, `seed ${seed}: геометрия одиночных ворот`);
+      check(
+        subtractInterval(-s.width / 2, s.width / 2, g.x - g.width / 2, g.x + g.width / 2).length === 0,
+        `seed ${seed}: одиночный барьер не покрывает весь пролёт (щель у стены)`
+      );
     } else if (s.gates.length === 2) {
       totalForks++;
       const [ga, gb] = s.gates;
@@ -177,7 +184,28 @@ for (let seed = 1; seed <= 200; seed++) {
       }
       check(ga.schoolId !== gb.schoolId, `seed ${seed}: два барьера развилки — разные школы`);
       check(Math.abs(Math.abs(ga.x) - s.width / 4) < 1e-9 && Math.abs(Math.abs(gb.x) - s.width / 4) < 1e-9, `seed ${seed}: x барьеров = ±w/4`);
-      check(Math.abs(ga.width - (s.width / 2 - 0.3)) < 1e-9, `seed ${seed}: ширина барьера = половина коридора`);
+      check(
+        Math.abs(ga.width - (s.width * FORK_GATE_FRACTION + GATE_WALL_OVERLAP)) < 1e-9,
+        `seed ${seed}: ширина барьера = половина коридора + нахлёст`
+      );
+      // Полнота покрытия пролёта: объединение обоих барьеров должно без щели
+      // закрыть ВСЮ ширину секции [-half, half] — иначе на границе стены и
+      // барьера (или между двумя барьерами по центру) остаётся непростреленная
+      // щель. Проверяем той же subtractInterval, которой SectionChunk закрывает
+      // щели пола — считаем щель ОТ покрытия барьеров, а не ОТ соседней секции.
+      {
+        const half = s.width / 2;
+        const [gLeft, gRight] = ga.x < gb.x ? [ga, gb] : [gb, ga];
+        const covered = { start: gLeft.x - gLeft.width / 2, end: gRight.x + gRight.width / 2 };
+        // Между барьерами по центру не должно остаться щели вовсе (их
+        // собственные интервалы обязаны как минимум соприкасаться).
+        check(
+          gLeft.x + gLeft.width / 2 >= gRight.x - gRight.width / 2 - 1e-9,
+          `seed ${seed}: щель между барьерами развилки по центру`
+        );
+        const gaps = subtractInterval(-half, half, covered.start, covered.end);
+        check(gaps.length === 0, `seed ${seed}: барьеры развилки не покрывают весь пролёт (щель у стены)`);
+      }
     }
     if (isApproach) check(s.gates.length === 0, `seed ${seed}: у подхода не должно быть выхода`);
 

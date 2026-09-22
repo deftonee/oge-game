@@ -2,7 +2,7 @@ import { ALL_SPELLS, getSpellsBySchool } from "../../data/spells";
 import type { GameState } from "../../core/GameState";
 import type { SectionSpec } from "../spec/SectionSpec";
 import type { RandomFn } from "../math/Rng";
-import { FORK_GATE_FRACTION } from "./WorldGenConfig";
+import { FORK_GATE_FRACTION, GATE_WALL_OVERLAP } from "./WorldGenConfig";
 
 /**
  * Планировщик выходных ворот секции: уровень барьера (число тем) и тематика
@@ -49,13 +49,13 @@ export class GatePlanner {
     const required = GatePlanner.requiredSpells(spec.tier, ALL_SPELLS.length);
 
     if (fork) {
-      const gateWidth = spec.width * FORK_GATE_FRACTION - 0.3;
+      const gateWidth = spec.width * FORK_GATE_FRACTION + GATE_WALL_OVERLAP;
       spec.gates = [
         { id: `gate-${spec.index}-a`, requiredSpells: required, schoolId: schools[0] ?? null, x: -spec.width / 4, width: gateWidth, fork: oneWay },
         { id: `gate-${spec.index}-b`, requiredSpells: required, schoolId: schools[1] ?? schools[0] ?? null, x: spec.width / 4, width: gateWidth, fork: oneWay },
       ];
     } else {
-      spec.gates = [{ id: `gate-${spec.index}`, requiredSpells: required, schoolId: schools[0] ?? null, x: 0, width: spec.width - 0.4 }];
+      spec.gates = [{ id: `gate-${spec.index}`, requiredSpells: required, schoolId: schools[0] ?? null, x: 0, width: spec.width + GATE_WALL_OVERLAP }];
     }
   }
 
@@ -68,7 +68,7 @@ export class GatePlanner {
         requiredSpells: GatePlanner.requiredSpells(prevSpec.tier, ALL_SPELLS.length),
         schoolId: schools[0] ?? null,
         x: 0,
-        width: prevSpec.width - 0.4,
+        width: prevSpec.width + GATE_WALL_OVERLAP,
       },
     ];
   }

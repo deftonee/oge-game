@@ -164,7 +164,7 @@ export type {
   SectionSpec,
 } from "./spec/SectionSpec";
 export type { WorldSpec, TrackSnapshot, IdCounters } from "./spec/WorldSpec";
-export type { Vec2, ArcFrame, AxialFrame } from "./geometry/SectionGeometry";
+export type { Vec2, ArcFrame, AxialFrame, Interval } from "./geometry/SectionGeometry";
 export type { RandomFn } from "./math/Rng";
 export {
   yawAt,
@@ -175,6 +175,9 @@ export {
   normAngle,
   sampleAxisPath,
   sampleBorderPath,
+  subtractInterval,
+  incomingCoverage,
+  gapsAtJoint,
 } from "./geometry/SectionGeometry";
 export { Rng, mulberry32, randRange, randInt, pick, randSign, chance } from "./math/Rng";
 export * from "./generation/WorldGenConfig";

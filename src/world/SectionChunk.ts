@@ -1,6 +1,6 @@
 import { Scene, Mesh, MeshBuilder, ExtrudeShape, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
 import type { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec } from "./spec/SectionSpec";
-import { localToWorld, yawAt } from "./geometry/SectionGeometry";
+import { localToWorld, yawAt, gapsAtJoint } from "./geometry/SectionGeometry";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
@@ -88,7 +88,7 @@ export class SectionChunk {
     this.buildFloor();
     this.buildWalls(wallMat);
     this.buildPartition(wallMat);
-    this.buildJointPatch();
+    this.buildJointPatch(wallMat);
     this.buildDeadEndCap(wallMat);
     this.buildSpawnCap(wallMat);
     this.buildApproachCap(wallMat);
@@ -259,10 +259,35 @@ export class SectionChunk {
   }
 
   /**
-   * Ремонт стыка с предыдущей секцией: бордюры-«уши» при смене ширины
-   * коридора (расширение 8→24 на входе, сужение на вилках развилки) — у
-   * входа в более широкую/узкую секцию кромка пола обрывается в пустоту,
-   * низкие серые бордюры с коллизией не дают сойти с пола.
+   * Ремонт стыка с предыдущей секцией: смена ширины коридора (расширение
+   * 8→24 на входе, сужение на вилках развилки) оставляет на плоскости стыка
+   * часть ширины ОДНОЙ из двух секций без пола/стены с другой стороны.
+   * Раньше это были ДВА разных случая с разной геометрией («уши» — низкий
+   * бордюр, и «рельсы» — полновысотная стена) со своей отдельной, слегка
+   * разной формулой для каждого. По факту это ОДНА и та же задача с двумя
+   * зеркальными исходами: щель = собственная ширина ТЕКУЩЕЙ секции минус
+   * пересечение с покрытием ПРЕДЫДУЩЕЙ (см. gapsAtJoint в
+   * SectionGeometry) — независимо от того, шире предыдущая секция или более узкая,
+   * считается и закрывается ОДНОЙ формулой, одной полновысотной стеной
+   * прямо в плоскости стыка. Без этой стены игрок либо проваливается,
+   * отступив вбок за кромку широкого пола перед сужением, либо делает шаг
+   * в сторону сразу после расширения — тоже в пустоту.
+   *
+   * У ВЕТОК РАЗВИЛКИ (spec.forkBranch) формула автоматически даёт пустой
+   * список щелей — отдельный случай не нужен: обе ветки в сумме ровно
+   * замащивают ширину родителя (см. TrackBuilder.appendFork), поэтому за
+   * пределами собственной ширины ветки всегда лежит пол СОСЕДНЕЙ ветки, а
+   * не пустота.
+   *
+   * У СЕКЦИЙ СО ШВОМ (spec.seam — схождение веток развилки, J) щель считает
+   * и закрывает buildSeam(): туда ветки подходят НЕ по касательной
+   * (расходящаяся дуга — см. FORK_DIVERGENCE_ANGLE), курс на стыке
+   * РАЗРЫВЕН, и прямая проекция gapsAtJoint для такого стыка систематически
+   * неточна (проецирует вдоль курса J, а не вдоль реального наклонного
+   * торца ветки). Рассинхрон между этой грубой прямой проекцией и точной
+   * геометрией шва и был вероятным источником то пропадавших, то лишних
+   * кусков стены именно на развилках — поэтому такие секции здесь
+   * пропускаются целиком, J получает стены РОВНО один раз, от buildSeam.
    *
    * Раньше здесь ещё чинился клиновидный зазор пола и щель в заборе на
    * ВНЕШНЕЙ стороне изгиба (диск-заплатка по jointRadius) — секции были
@@ -272,118 +297,33 @@ export class SectionChunk {
    * ВСЕГДА встречаются с равным курсом (конец предыдущей = начало текущей) —
    * ни клина, ни щели в заборе больше не возникает, чинить нечего.
    */
-  private buildJointPatch(): void {
+  private buildJointPatch(wallMat: StandardMaterial): void {
     const spec = this.spec;
-    if (spec.index === 0 || spec.prevWidth <= 0) return;
+    if (spec.index === 0 || spec.prevWidth <= 0 || spec.seam) return;
 
-    const curHalf = spec.width / 2;
+    const gaps = gapsAtJoint(spec);
+    if (gaps.length === 0) return;
 
-    // --- бордюры-«уши» по кромке входа при разной ширине/положении секций ---
-    // ВАЖНО: раньше формула клала «уши» СИММЕТРИЧНО вокруг spec.start
-    // (±midHalf), что верно только если предыдущая и текущая секции
-    // делят одну осевую линию. У веток развилки и схождения J это не
-    // так — они смещены вбок на ±SECTION_WIDTH/4 и вдобавок расходятся
-    // (см. FORK_DIVERGENCE_ANGLE) — старая формула сажала бордюры мимо:
-    // либо в пустоту за пределами всего коридора, либо горбом высотой 0.6
-    // прямо посреди пола соседней ветки. Считаем реальную проекцию prevEnd
-    // (и, если есть, prevEnd2 — вторая разошедшаяся ветка настоящей
-    // развилки, см. SectionSpec.prevWidth2) на ось ТЕКУЩЕЙ секции — без
-    // предположения об общем центре — и «ухо» ставим только там, где
-    // покрытие обеих веток ДЕЙСТВИТЕЛЬНО не дотягивается до края текущей.
-    //
-    // Ветки развилки в «ушах» не нуждаются вовсе: их единственная
-    // «оголённая» кромка обращена к территории соседней ветки, которая
-    // либо построена и сама даёт пол, либо недостижима (за барьером
-    // развилки) — а с внешней стороны у ветки с самого стыка уже стоит
-    // её собственная полновысотная стена (buildWalls), см. WorldGenerator:
-    // ветка размером SECTION_WIDTH/2 занимает ровно половину ширины
-    // родителя, без зазора.
-    if (!spec.forkBranch) {
-      const perpCX = Math.cos(spec.yaw);
-      const perpCZ = -Math.sin(spec.yaw);
-
-      // Проекция ОДНОЙ предыдущей секции (width/end) на ось текущей — общий
-      // хелпер, чтобы не дублировать формулу для prev и (опционально) prev2.
-      const project = (width: number, end: { x: number; z: number }) => {
-        const centerU = (end.x - spec.start.x) * perpCX + (end.z - spec.start.z) * perpCZ;
-        const half = width / 2;
-        return { min: centerU - half, max: centerU + half };
-      };
-
-      const prevRange = project(spec.prevWidth, spec.prevEnd);
-      // Если есть вторая ветка (настоящая развилка, а не тупик) — реальное
-      // покрытие "предыдущего" по факту это ОБЪЕДИНЕНИЕ обеих веток, а не
-      // только одной: иначе кромка второй ветки (симметричный снос в
-      // противоположную сторону) осталась бы вовсе без патча.
-      let prevMin = prevRange.min;
-      let prevMax = prevRange.max;
-      if (spec.prevWidth2 > 0) {
-        const prev2Range = project(spec.prevWidth2, spec.prevEnd2);
-        prevMin = Math.min(prevMin, prev2Range.min);
-        prevMax = Math.max(prevMax, prev2Range.max);
-      }
-
-      const curMin = -curHalf;
-      const curMax = curHalf;
-
-      const gaps: { center: number; halfLen: number }[] = [];
-      const leftGap = curMin - prevMin; // предыдущее покрытие торчит левее текущей
-      if (leftGap > 0.35) gaps.push({ center: (prevMin + curMin) / 2, halfLen: leftGap / 2 });
-      const rightGap = prevMax - curMax; // предыдущее покрытие торчит правее текущей
-      if (rightGap > 0.35) gaps.push({ center: (curMax + prevMax) / 2, halfLen: rightGap / 2 });
-
-      if (gaps.length > 0) {
-        const eMat = this.makeMaterial(`edgeMat_${spec.index}`, "#8a8f98");
-        for (const gap of gaps) {
-          const edge = MeshBuilder.CreateBox(
-            `edge_${spec.index}_${gap.center >= 0 ? "r" : "l"}`,
-            { width: gap.halfLen * 2, height: 0.6, depth: 0.3 },
-            this.scene
-          );
-          edge.material = eMat;
-          edge.rotation.y = spec.yaw;
-          edge.position.set(spec.start.x + perpCX * gap.center, 0.3, spec.start.z + perpCZ * gap.center);
-          edge.checkCollisions = true;
-          this.disposables.push(edge);
-        }
-        this.disposables.push(eMat);
-      }
-
-      // --- перемычки по кромке входа ШИРОКОЙ секции ---
-      // Обратный случай «ушей»: ТЕКУЩАЯ секция шире предыдущей (напр. первая
-      // широкая секция 24 м после стартовой 8 м, либо J/широкая после веток).
-      // Пол текущей у кромки входа выступает за покрытие узкой — «хвост»
-      // [prevMax..half] от стены узкой до стены широкой, стоящих на общей
-      // границе, остаётся открытым в бездну у стыка. Закрываем его
-      // ПОЛНОВЫСОТНОЙ стеной в плоскости входа: от края покрытия prev до
-      // собственной боковой стены текущей, оставляя центральный проём.
-      // (prevMin/prevMax — уже объединённое покрытие, включая prev2 для J.)
-      const overshoots: { center: number; halfLen: number }[] = [];
-      const overLeft = prevMin - curMin; // текущая торчит левее покрытия prev
-      if (overLeft > 0.35) overshoots.push({ center: (curMin + prevMin) / 2, halfLen: overLeft / 2 });
-      const overRight = curMax - prevMax; // текущая торчит правее покрытия prev
-      if (overRight > 0.35) overshoots.push({ center: (prevMax + curMax) / 2, halfLen: overRight / 2 });
-
-      if (overshoots.length > 0) {
-        const pMat = this.makeMaterial(`jointRailMat_${spec.index}`, "#8a8f98");
-        for (const os of overshoots) {
-          const seg = MeshBuilder.CreateBox(
-            `jointRail_${spec.index}_${os.center >= 0 ? "r" : "l"}`,
-            { width: Math.max(0.3, os.halfLen * 2), height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
-            this.scene
-          );
-          seg.material = pMat;
-          seg.rotation.y = spec.yaw;
-          seg.position.set(
-            spec.start.x + perpCX * os.center,
-            SectionChunk.WALL_HEIGHT / 2,
-            spec.start.z + perpCZ * os.center
-          );
-          seg.checkCollisions = true;
-          this.disposables.push(seg);
-        }
-        this.disposables.push(pMat);
-      }
+    const perpX = Math.cos(spec.yaw);
+    const perpZ = -Math.sin(spec.yaw);
+    for (const gap of gaps) {
+      const width = gap.end - gap.start;
+      if (width <= 0.05) continue; // суб-сантиметровый хвост — численный шум, не реальная щель
+      const center = (gap.start + gap.end) / 2;
+      const seg = MeshBuilder.CreateBox(
+        `jointWall_${spec.index}_${gap.start.toFixed(2)}`,
+        { width, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
+        this.scene
+      );
+      seg.rotation.y = spec.yaw;
+      seg.position.set(
+        spec.start.x + perpX * center,
+        SectionChunk.WALL_HEIGHT / 2,
+        spec.start.z + perpZ * center
+      );
+      seg.material = wallMat;
+      seg.checkCollisions = true;
+      this.disposables.push(seg);
     }
   }
 
@@ -557,7 +497,7 @@ export class SectionChunk {
    * самостоятельна, у неё собственные пол/стены/торцевая стена в СОБСТВЕННОЙ
    * прямой (curvature=0) локальной системе координат (spur.start/spur.yaw),
    * а не общий с родителем пол/стена, «прорезанные» дырой. Родитель и ниша
-   * physически соприкасаются РОВНО по плоскости проёма (доказательство: пол
+   * физически соприкасаются РОВНО по плоскости проёма (доказательство: пол
    * ниши начинается в тех же мировых точках, где buildWalls вырезал проём
    * в стене родителя, — см. wallSegments) — не склеены, а состыкованы.
    */

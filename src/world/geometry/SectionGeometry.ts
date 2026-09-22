@@ -150,3 +150,107 @@ export function sampleBorderPath(section: AxialFrame, localX: number, stepLength
   }
   return points;
 }
+
+// -----------------------------------------------------------------------
+// Стыки секций: щели на границе, которые нужно закрыть стеной.
+// -----------------------------------------------------------------------
+
+/**
+ * Полуоткрытый интервал на ПОПЕРЕЧНОЙ оси секции (метры от центра, локальные
+ * x) — единица измерения для gapsAtJoint/subtractInterval.
+ */
+export interface Interval {
+  start: number;
+  end: number;
+}
+
+/**
+ * Части интервала [outerStart, outerEnd], НЕ покрытые под-интервалом
+ * [innerStart, innerEnd] — то, что нужно закрыть стеной, если "внутренний"
+ * интервал — это единственное реально проходимое место снаружи. Возвращает
+ * 0, 1 или 2 непустых "хвоста", отсортированных по возрастанию x.
+ *
+ * Если под-интервал вообще не пересекается с outer (вырожденный случай,
+ * которого не должно быть при корректных данных генератора) — возвращается
+ * outer ЦЕЛИКОМ: лучше по ошибке поставить лишнюю стену, чем молча оставить
+ * дыру в полу.
+ */
+export function subtractInterval(
+  outerStart: number,
+  outerEnd: number,
+  innerStart: number,
+  innerEnd: number,
+  eps = 1e-6
+): Interval[] {
+  const lo = Math.max(innerStart, outerStart);
+  const hi = Math.min(innerEnd, outerEnd);
+  const gaps: Interval[] = [];
+  if (hi - lo <= eps) {
+    if (outerEnd - outerStart > eps) gaps.push({ start: outerStart, end: outerEnd });
+    return gaps;
+  }
+  if (lo - outerStart > eps) gaps.push({ start: outerStart, end: lo });
+  if (outerEnd - hi > eps) gaps.push({ start: hi, end: outerEnd });
+  return gaps;
+}
+
+/**
+ * Покрытие ПРЕДЫДУЩЕЙ секции на плоскости стыка (spec.start), спроецированное
+ * на поперечную ось ТЕКУЩЕЙ секции (перпендикуляр её курса spec.yaw).
+ *
+ * Корректно ТОЛЬКО когда курс НЕПРЕРЫВЕН на стыке (yawAt(prev, prev.length)
+ * === spec.yaw — инвариант обычного стыка и ветки развилки, проверяется
+ * тестами генератора): тогда локальная ось x предыдущей секции в точке стыка
+ * и локальная ось x текущей секции в точке z=0 — буквально одна и та же
+ * прямая, и спроецировать можно простым сдвигом на centerU, без поворота.
+ *
+ * У секций со швом (spec.seam) курс НА СТЫКЕ разрывен (ветки развилки
+ * расходятся дугой и подходят к схождению J под углом) — для них эта
+ * проекция систематически неточна, см. gapsAtJoint.
+ */
+export function incomingCoverage(section: {
+  start: Vec2;
+  yaw: number;
+  prevWidth: number;
+  prevEnd: Vec2;
+}): Interval {
+  const perpX = Math.cos(section.yaw);
+  const perpZ = -Math.sin(section.yaw);
+  const centerU = (section.prevEnd.x - section.start.x) * perpX + (section.prevEnd.z - section.start.z) * perpZ;
+  const prevHalf = section.prevWidth / 2;
+  return { start: centerU - prevHalf, end: centerU + prevHalf };
+}
+
+/**
+ * Щели на плоскости стыка (spec.start) для ТЕКУЩЕЙ секции: части её
+ * собственной ширины [-width/2, width/2], НЕ покрытые полом предыдущей
+ * секции (incomingCoverage) — их нужно закрыть тонкой поперечной стеной
+ * ровно в плоскости стыка, иначе за ней бездна. Одна формула закрывает ОБА
+ * направления смены ширины:
+ *   - предыдущая секция более узкая (сужение, напр. вход в ветку развилки шире её
+ *     гейта) — щель у краёв ШИРИНЫ ТЕКУЩЕЙ секции, за которыми пол
+ *     предыдущей уже кончился;
+ *   - предыдущая секция шире (расширение, напр. 8→24 на входе в мир) —
+ *     щель за пределами ширины текущей секции, где пол предыдущей всё ещё
+ *     есть, но текущая (и её собственные стены) его уже не продолжают.
+ *
+ * У ВЕТОК РАЗВИЛКИ (spec.forkBranch) формула автоматически даёт ПУСТОЙ
+ * список: обе ветки в сумме ровно замащивают ширину родителя (см.
+ * TrackBuilder.appendFork) — за пределами собственной ширины одной ветки
+ * всегда лежит пол СОСЕДНЕЙ, а не пустота, отдельный случай не нужен.
+ *
+ * У СЕКЦИЙ СО ШВОМ (spec.seam) эта функция не вызывается вовсе (курс
+ * разрывен — см. incomingCoverage) — такой стык считает и закрывает
+ * buildSeam() по реальной наклонной кромке ветки, а не по этой проекции.
+ */
+export function gapsAtJoint(section: {
+  start: Vec2;
+  yaw: number;
+  width: number;
+  prevWidth: number;
+  prevEnd: Vec2;
+}): Interval[] {
+  const half = section.width / 2;
+  const coverage = incomingCoverage(section);
+  return subtractInterval(-half, half, coverage.start, coverage.end);
+}
