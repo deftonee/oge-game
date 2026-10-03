@@ -3,7 +3,6 @@ import {
   localToWorld,
   distPointToSegment,
   yawAt,
-  subtractInterval,
   FIRST_SECTION_WIDTH,
   SECTION_WIDTH,
   DEADEND_LENGTH,
@@ -16,6 +15,17 @@ import {
   SIDE_SPUR_MARGIN,
 } from "../src/world/WorldGenerator";
 import { GameState } from "../src/core/GameState";
+
+/** Части отрезка [outerStart, outerEnd], не накрытые отрезком [innerStart, innerEnd]. */
+function uncovered(outerStart: number, outerEnd: number, innerStart: number, innerEnd: number, eps = 1e-6): number[][] {
+  const lo = Math.max(innerStart, outerStart);
+  const hi = Math.min(innerEnd, outerEnd);
+  if (hi - lo <= eps) return outerEnd - outerStart > eps ? [[outerStart, outerEnd]] : [];
+  const gaps: number[][] = [];
+  if (lo - outerStart > eps) gaps.push([outerStart, lo]);
+  if (outerEnd - hi > eps) gaps.push([hi, outerEnd]);
+  return gaps;
+}
 
 let failures = 0;
 let checks = 0;
@@ -165,7 +175,7 @@ for (let seed = 1; seed <= 200; seed++) {
       check(g.schoolId !== null, `seed ${seed}: ворота должны иметь школу`);
       check(Math.abs(g.x) < 1e-9 && Math.abs(g.width - (s.width + GATE_WALL_OVERLAP)) < 1e-9, `seed ${seed}: геометрия одиночных ворот`);
       check(
-        subtractInterval(-s.width / 2, s.width / 2, g.x - g.width / 2, g.x + g.width / 2).length === 0,
+        uncovered(-s.width / 2, s.width / 2, g.x - g.width / 2, g.x + g.width / 2).length === 0,
         `seed ${seed}: одиночный барьер не покрывает весь пролёт (щель у стены)`
       );
     } else if (s.gates.length === 2) {
@@ -191,8 +201,7 @@ for (let seed = 1; seed <= 200; seed++) {
       // Полнота покрытия пролёта: объединение обоих барьеров должно без щели
       // закрыть ВСЮ ширину секции [-half, half] — иначе на границе стены и
       // барьера (или между двумя барьерами по центру) остаётся непростреленная
-      // щель. Проверяем той же subtractInterval, которой SectionChunk закрывает
-      // щели пола — считаем щель ОТ покрытия барьеров, а не ОТ соседней секции.
+      // щель. Считаем щель ОТ покрытия барьеров, а не ОТ соседней секции.
       {
         const half = s.width / 2;
         const [gLeft, gRight] = ga.x < gb.x ? [ga, gb] : [gb, ga];
@@ -203,7 +212,7 @@ for (let seed = 1; seed <= 200; seed++) {
           gLeft.x + gLeft.width / 2 >= gRight.x - gRight.width / 2 - 1e-9,
           `seed ${seed}: щель между барьерами развилки по центру`
         );
-        const gaps = subtractInterval(-half, half, covered.start, covered.end);
+        const gaps = uncovered(-half, half, covered.start, covered.end);
         check(gaps.length === 0, `seed ${seed}: барьеры развилки не покрывают весь пролёт (щель у стены)`);
       }
     }

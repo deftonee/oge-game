@@ -1,5 +1,6 @@
-// Диагностика швов развилки: для сида с развилкой печатаем кромки веток,
-// границы проёмов и проверяем, что заплатки AB закрывают клин у входа в J.
+// Диагностика швов развилки: для сида с развилкой печатаем кромки веток и
+// проверяем, что углы заплаток лежат в пределах коридора J. Полноту пола и
+// стен проверяет test-world-footprint.ts.
 import { generateWorld } from "../src/world/WorldGenerator";
 import type { SectionSpec, SeamSpec } from "../src/world/spec/SectionSpec";
 
@@ -26,7 +27,7 @@ for (let seed = 1; seed <= 60 && checked < 12; seed++) {
   for (const p of seam.patches) {
     // Печать углов для ручной проверки геометрии
     console.log(
-      `  seed=${seed} J#${join.index} patch: edgeA=(${p.edgeA.x.toFixed(2)},${p.edgeA.z.toFixed(2)}) edgeB=(${p.edgeB.x.toFixed(2)},${p.edgeB.z.toFixed(2)}) outer=${p.outerCorner ? `(${p.outerCorner.x.toFixed(2)},${p.outerCorner.z.toFixed(2)})` : "null"}`
+      `  seed=${seed} J#${join.index} patch: edgeA=(${p.edgeA.x.toFixed(2)},${p.edgeA.z.toFixed(2)}) edgeB=(${p.edgeB.x.toFixed(2)},${p.edgeB.z.toFixed(2)})`
     );
     // Каждый угол заплатки должен быть в пределах коридора J по x.
     for (const c of [p.edgeA, p.edgeB, p.lineA, p.lineB]) {
@@ -41,12 +42,7 @@ for (let seed = 1; seed <= 60 && checked < 12; seed++) {
       console.log(`seed=${seed} J#${join.index}: кромка ветки уже за линией входа J (z>0) — заплатка лишняя?`);
     }
   }
-  // Задняя стена обязана существовать между проёмами обеих веток (бездна между кромками).
-  if (seam.backWalls.length === 0) {
-    ok = false;
-    console.log(`seed=${seed} J#${join.index}: нет задней стены (проёмы веток накрывают всю линию входа?)`);
-  }
-  if (ok) console.log(`seed=${seed} J#${join.index}: seam OK patches=${seam.patches.length} backWalls=${seam.backWalls.length}`);
+  if (ok) console.log(`seed=${seed} J#${join.index}: seam OK patches=${seam.patches.length}`);
   else failed++;
 }
 console.log(`checked=${checked} failed=${failed}`);

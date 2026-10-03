@@ -148,8 +148,7 @@ export class TrackBuilder {
       { x: this.cursor.x, z: this.cursor.z },
       end,
       startYaw,
-      curvature,
-      this.prevSpec
+      curvature
     );
     this.currentYaw = startYaw + curvature * length; // курс в конце = курс начала следующей
     this.assemble(parent, isFirst);
@@ -221,8 +220,7 @@ export class TrackBuilder {
         start,
         branchEnd,
         this.currentYaw,
-        curvature,
-        parent
+        curvature
       );
       spec.forkBranch = branch;
       spec.forkGateId = gateId;
@@ -233,10 +231,6 @@ export class TrackBuilder {
     };
     const branchA = mkBranch("a", 1, parent.gates[0].id);
     const branchB = mkBranch("b", -1, parent.gates[1].id);
-
-    // J стыкуется с ПРОДОЛЖАЮЩЕЙ веткой (при тупике — обязательно НЕ тупиковой).
-    const continuingBranch = deadSlot === "a" ? branchB : branchA;
-    const otherBranch = continuingBranch === branchA ? branchB : branchA;
 
     // Общая секция-схождение: вход J — на исходной оси parent'а, на «глубине»
     // branchLen — там встречаются обе разошедшиеся ветки.
@@ -251,9 +245,7 @@ export class TrackBuilder {
       jStart,
       jEnd,
       this.currentYaw,
-      0,
-      continuingBranch,
-      deadEnd ? null : otherBranch
+      0
     );
     join.seam = this.computeSeam(jStart, [branchA, branchB], deadSlot);
     this.assemble(join, false);
@@ -278,7 +270,6 @@ export class TrackBuilder {
    */
   private computeSeam(jStart: Vec2, branches: SectionSpec[], deadSlot: "a" | "b" | null): SeamSpec {
     const patches: SeamPatchSpec[] = [];
-    const backWalls: { from: Vec2; to: Vec2 }[] = [];
     // Направление входа в J = курс веток на входе (= yaw родителя на стыке).
     const yawJ = branches[0].yaw;
     const cosY = Math.cos(yawJ);
@@ -290,14 +281,10 @@ export class TrackBuilder {
       return { x: dx * cosY - dz * sinY, z: dx * sinY + dz * cosY };
     };
 
-    // Проёмы веток в линии входа J (для задней стены между ними).
-    const openings: { from: number; to: number }[] = [];
-
     for (const spec of branches) {
       // Тупиковая ветка к J не примыкает (её торец в стороне, перед ним —
       // пол родительского коридора развилки... нет: пустота) — заплаты нет;
-      // её торец закрывается торцевой стеной в её собственном чанке
-      // (SectionChunk.buildEnvironment, spec.isDeadEnd).
+      // её торец — просто граница пола, стену там выводит FootprintIndex.
       const isDead = deadSlot !== null && spec.forkBranch === deadSlot;
       if (isDead) continue;
       // Торец ветки — spec.end + кромка ±half перпендикулярно конечному курсу.
@@ -356,7 +343,7 @@ export class TrackBuilder {
       if (segHi === -Infinity || segHi <= segLo + 1e-9) continue; // вся кромка внутри J — шов не нужен
       const loT = Math.max(segLo, loWidthT);
       const hiT = Math.min(segHi, hiWidthT);
-      if (hiT <= loT + 1e-9) continue; // висящее — вне ширины J: только ограждение
+      if (hiT <= loT + 1e-9) continue; // висящее — вне ширины J: заплатки нет
       const a = at(loT);
       const b = at(hiT);
       // Нахлёст на пол J: 0.5 м вглубь. Линия входа под каждым краем — та же x.
@@ -364,40 +351,16 @@ export class TrackBuilder {
       const lineA = { x: a.x, z: OVERLAP };
       const lineB = { x: b.x, z: OVERLAP };
 
-      // Внешний угол кромки за шириной J — для ограждений (перила+стена J назад).
-      const outerCandidate = loT > 0 ? edge[0] : hiT < 1 ? edge[1] : null;
-      const outerCorner = outerCandidate && Math.abs(outerCandidate.x) > J_HALF + 1e-6 ? outerCandidate : null;
-
       patches.push({
         color: spec.color,
         edgeA: a,
         edgeB: b,
         lineA,
         lineB,
-        outerCorner,
       });
-
-      // Проём ветки в линии входа J — проекция обрезанной кромки на z=0.
-      openings.push({ from: Math.min(a.x, b.x), to: Math.max(a.x, b.x) });
     }
 
-    // Задняя стена J: линия входа минус проёмы веток. Сортируем проёмы и
-    // строим стены в зазорах — они закрывают бездну между ветками (там, где
-    // кромки обеих веток висят перед входом J).
-    openings.sort((p, q) => p.from - q.from);
-    const J_HALF2 = SECTION_WIDTH / 2;
-    let cursorX = -J_HALF2;
-    for (const op of openings) {
-      if (op.from - cursorX > 0.05) {
-        backWalls.push({ from: { x: cursorX, z: 0 }, to: { x: op.from, z: 0 } });
-      }
-      cursorX = Math.max(cursorX, op.to);
-    }
-    if (J_HALF2 - cursorX > 0.05) {
-      backWalls.push({ from: { x: cursorX, z: 0 }, to: { x: J_HALF2, z: 0 } });
-    }
-
-    return { patches, backWalls };
+    return { patches };
   }
 
   /**
@@ -427,8 +390,7 @@ export class TrackBuilder {
       approachStart,
       approachEnd,
       approachStartYaw,
-      approachCurvature,
-      this.prevSpec
+      approachCurvature
     );
     approach.color = APPROACH_COLOR;
     // Подход — спокойная зона: без сущностей и сундуков, только трава и бордюры.

@@ -1,5 +1,6 @@
 import { Scene } from "@babylonjs/core";
 import { SectionChunk } from "./SectionChunk";
+import { FootprintIndex } from "./geometry/Footprint";
 import type { WorldSpec } from "./spec/WorldSpec";
 import type { SectionSpec } from "./spec/SectionSpec";
 import { distPointToSectionAxis } from "./geometry/SectionGeometry";
@@ -59,7 +60,10 @@ export class WorldStreamer {
   private static readonly DISPOSE_MARGIN = 2;
 
   constructor(scene: Scene, world: WorldSpec, private gameState: GameState) {
-    this.chunks = world.sections.map((s) => new SectionChunk(scene, s));
+    // Пол и стены считаются по spec ВСЕГО мира, а не по тому, какие чанки
+    // сейчас построены — стыки не зависят от окна стриминга.
+    const footprints = new FootprintIndex(world.sections);
+    this.chunks = world.sections.map((s) => new SectionChunk(scene, s, footprints));
   }
 
   /**

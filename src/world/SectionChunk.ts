@@ -1,6 +1,7 @@
-import { Scene, Mesh, MeshBuilder, ExtrudeShape, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
-import type { SectionSpec, ScatterSeed, BorderStyle, SideSpurSpec } from "./spec/SectionSpec";
-import { localToWorld, yawAt, gapsAtJoint } from "./geometry/SectionGeometry";
+import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
+import type { SectionSpec, ScatterSeed, BorderStyle } from "./spec/SectionSpec";
+import { localToWorld, yawAt } from "./geometry/SectionGeometry";
+import { FootprintIndex, type FootprintPiece, type WallSeg } from "./geometry/Footprint";
 import { Witch } from "../entities/Witch";
 import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
@@ -26,7 +27,7 @@ import { GameState } from "../core/GameState";
  * z — вдоль дуги коридора постоянной кривизны spec.curvature): все сущности
  * и декор из spec заданы в локальных координатах и переводятся в мировые
  * здесь же (toWorld). Пол и стены — не плоский прямоугольник/бокс, а лента
- * (ribbon), повторяющая изгиб (см. curvePath) — соседние секции всегда
+ * (ribbon), повторяющая изгиб (см. buildFloors) — соседние секции всегда
  * встречаются с равным курсом, без излома и без диска-заплатки на стыке.
  * Выходные ворота (spec.gates) стоят на КОНЦЕ секции.
  */
@@ -40,7 +41,16 @@ export class SectionChunk {
   private built = false;
   private disposables: { dispose(): void }[] = [];
 
-  constructor(private scene: Scene, public readonly spec: SectionSpec) {}
+  /**
+   * footprints — пол ВСЕГО мира (см. geometry/Footprint): стены чанка выводятся
+   * из границы пола с учётом соседей, независимо от того, какие из них сейчас
+   * построены. Без него чанк знает только о себе (для тестов/ручных секций).
+   */
+  private readonly footprints: FootprintIndex;
+
+  constructor(private scene: Scene, public readonly spec: SectionSpec, footprints?: FootprintIndex) {
+    this.footprints = footprints ?? new FootprintIndex([spec]);
+  }
 
   public get isBuilt(): boolean {
     return this.built;
@@ -85,15 +95,14 @@ export class SectionChunk {
     const wallMat = this.makeMaterial(`wallMat_${this.spec.index}`, SectionChunk.WALL_COLOR);
     this.disposables.push(wallMat);
 
-    this.buildFloor();
-    this.buildWalls(wallMat);
+    // Пол и стены выводятся из ОДНОГО набора полигонов (geometry/Footprint):
+    // пол — меши по этим полигонам, стены — границы объединения полов, не
+    // закрытые соседним полом. Стыки секций, схождение веток, ниши, тупики,
+    // спавн и площадка у башни — всё это частные случаи одного правила, а не
+    // отдельные заплатки.
+    this.buildFloors();
+    this.buildBoundaryWalls(wallMat);
     this.buildPartition(wallMat);
-    this.buildJointPatch(wallMat);
-    this.buildDeadEndCap(wallMat);
-    this.buildSpawnCap(wallMat);
-    this.buildApproachCap(wallMat);
-    this.buildSeam(wallMat);
-    this.buildSideSpursEnvironment(wallMat);
     this.buildScatter(this.spec.grass, "grass");
     this.buildScatter(this.spec.bushes, "bush");
     this.buildBorder(this.spec.borderLeft);
@@ -113,128 +122,77 @@ export class SectionChunk {
     return localToWorld(this.spec, localX, localZ);
   }
 
-  /** Длина одного шага дискретизации дуги (м) — компромисс гладкости/полигонажа. */
-  private static readonly CURVE_SEGMENT_LENGTH = 2.5;
   private static readonly WALL_HEIGHT = 2.5;
-  private static readonly WALL_DEPTH = 0.3;
   private static readonly WALL_COLOR = "#4a4d52";
-  private static readonly SEAM_RAIL_COLOR = "#8a8f98";
-
-  private curveSteps(): number {
-    return Math.max(1, Math.round(this.spec.length / SectionChunk.CURVE_SEGMENT_LENGTH));
-  }
 
   /**
-   * Путь вдоль оси секции на фиксированном поперечном смещении localX и
-   * высоте y — уже в МИРОВЫХ координатах (учитывает кривизну через toWorld).
-   * Общий строительный блок для пола и стен: они больше не единый плоский
-   * прямоугольник/бокс, а лента (ribbon), повторяющая изгиб секции.
+   * Пол: по мешу-ленте на каждый полигон секции (полоса-дуга, заплатки шва
+   * веток, ниши, площадка у башни). Меш строится из тех же точек, что и
+   * полигон, из которого выводятся стены, — «пол ≠ коллизия» невозможно.
    */
-  private curvePath(localX: number, y: number): Vector3[] {
-    return this.curvePathRange(localX, y, 0, this.spec.length);
-  }
-
-  /**
-   * То же, что curvePath, но только для ПОДОТРЕЗКА [zStart, zEnd] длины
-   * секции — нужно, чтобы вырезать проём в стене под боковую нишу (см.
-   * wallSegments/buildWalls): проём делит одну сплошную ленту-стену на
-   * несколько отдельных лент, каждая строится по своему подотрезку.
-   */
-  private curvePathRange(localX: number, y: number, zStart: number, zEnd: number): Vector3[] {
-    const segLen = zEnd - zStart;
-    if (segLen <= 0) return [];
-    const steps = Math.max(1, Math.round(segLen / SectionChunk.CURVE_SEGMENT_LENGTH));
-    const points: Vector3[] = [];
-    for (let i = 0; i <= steps; i++) {
-      const z = zStart + (segLen * i) / steps;
-      const p = this.toWorld(localX, z);
-      points.push(new Vector3(p.x, y, p.z));
+  private buildFloors(): void {
+    const materials = new Map<string, StandardMaterial>();
+    for (const piece of this.footprints.piecesOf(this.spec)) {
+      let mat = materials.get(piece.color);
+      if (!mat) {
+        mat = this.makeMaterial(`floorMat_${piece.id}`, piece.color);
+        materials.set(piece.color, mat);
+        this.disposables.push(mat);
+      }
+      const floor = MeshBuilder.CreateRibbon(
+        `floor_${piece.id}`,
+        { pathArray: this.railPaths(piece), sideOrientation: Mesh.DOUBLESIDE },
+        this.scene
+      );
+      floor.material = mat;
+      floor.checkCollisions = true;
+      this.disposables.push(floor);
     }
-    return points;
+  }
+
+  private railPaths(piece: FootprintPiece): Vector3[][] {
+    return piece.rails.map((rail) => rail.map((p) => new Vector3(p.x, piece.y, p.z)));
   }
 
   /**
-   * Отрезки [start, end] (локальные z), которые реально нужно застроить
-   * стеной с заданной стороны — весь [0, length] МИНУС проёмы под боковые
-   * ниши (SideSpurSpec.doorZ ± width/2) этой же стороны. Без ниш — один
-   * сплошной отрезок [0, length], как и раньше (поведение не меняется).
+   * Стены: ровно по границе пола, не закрытой соседним полом (см.
+   * FootprintIndex.wallsOf). Каждый кусок — тонкий бокс, внутренняя грань
+   * которого лежит на кромке пола, а тело растёт НАРУЖУ — в бездну, поэтому
+   * не заходит в проходимую зону. Все боксы чанка сливаются в один меш:
+   * один draw call и один коллайдер на секцию.
    */
-  private wallSegments(side: "left" | "right"): { start: number; end: number }[] {
-    const length = this.spec.length;
-    const gaps = this.spec.sideSpurs
-      .filter((s) => s.side === side)
-      .map((s) => ({ start: Math.max(0, s.doorZ - s.width / 2), end: Math.min(length, s.doorZ + s.width / 2) }))
-      .filter((g) => g.end > g.start)
-      .sort((a, b) => a.start - b.start);
-
-    const segments: { start: number; end: number }[] = [];
-    let cursor = 0;
-    for (const gap of gaps) {
-      if (gap.start > cursor + 0.05) segments.push({ start: cursor, end: gap.start });
-      cursor = Math.max(cursor, gap.end);
-    }
-    if (length - cursor > 0.05) segments.push({ start: cursor, end: length });
-    return segments;
-  }
-
-  private buildFloor(): void {
-    const half = this.spec.width / 2;
-    const floor = MeshBuilder.CreateRibbon(
-      `floor_${this.spec.index}`,
-      { pathArray: [this.curvePath(-half, 0), this.curvePath(half, 0)], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    const mat = this.makeMaterial(`floorMat_${this.spec.index}`, this.spec.color);
-    floor.material = mat;
-    floor.checkCollisions = true;
-    this.disposables.push(floor, mat);
-  }
-
-  private buildWalls(wallMat: StandardMaterial): void {
-    const half = this.spec.width / 2;
+  private buildBoundaryWalls(wallMat: StandardMaterial): void {
+    const walls: readonly WallSeg[] = this.footprints.wallsOf(this.spec);
+    if (walls.length === 0) return;
     const h = SectionChunk.WALL_HEIGHT;
+    const boxes: Mesh[] = walls.map((w, i) => {
+      const dx = w.b.x - w.a.x;
+      const dz = w.b.z - w.a.z;
+      const box = MeshBuilder.CreateBox(
+        `wallBox_${this.spec.index}_${i}`,
+        { width: Math.hypot(dx, dz), height: h, depth: w.t },
+        this.scene
+      );
+      // Поворот на φ переводит локальную +x в (cosφ, -sinφ) — нужное нам (dx,dz)/len.
+      box.rotation.y = Math.atan2(-dz, dx);
+      box.position.set((w.a.x + w.b.x) / 2 + (w.n.x * w.t) / 2, h / 2, (w.a.z + w.b.z) / 2 + (w.n.z * w.t) / 2);
+      return box;
+    });
 
-    // Раньше правая стена была клоном левой (простой сдвиг — секция прямая,
-    // обе стены одной формы). На дуге левая и правая стена — РАЗНЫЕ кривые
-    // (внутренняя/внешняя сторона поворота, разный эффективный радиус),
-    // клонировать нечего — строим ленту для каждой отдельно.
-    //
-    // Если у секции есть боковые ниши (SideSpurSpec) с этой стороны — стена
-    // строится НЕСКОЛЬКИМИ лентами по wallSegments(), с разрывом-проёмом на
-    // месте каждой ниши, а не одной сплошной лентой на всю длину. Без ниш
-    // wallSegments() возвращает один отрезок [0, length] — ровно как раньше.
-    const buildSide = (localX: number, side: "left" | "right", tag: string) => {
-      const segments = this.wallSegments(side);
-      segments.forEach((seg, i) => {
-        // Видимая стена — единый ТОЛСТЫЙ объём вдоль дуги (ExtrudeShape с
-        // прямоугольным профилем). Backface-culling (FRONTSIDE) прячет дальнюю
-        // грань — виден один слой с реальной толщиной, как у боксов. Толстый
-        // коллайдер надёжно держит эллипсоид, наружу не выносит.
-        const outerX = side === "left" ? localX - SectionChunk.WALL_DEPTH : localX + SectionChunk.WALL_DEPTH;
-        const shape = [
-          new Vector3(localX, 0, 0),
-          new Vector3(outerX, 0, 0),
-          new Vector3(outerX, h, 0),
-          new Vector3(localX, h, 0),
-        ];
-        const wall = ExtrudeShape(
-          `wall${tag}_${this.spec.index}_${i}`,
-          {
-            shape,
-            path: this.curvePathRange(0, 0, seg.start, seg.end),
-            cap: Mesh.CAP_ALL,
-            sideOrientation: Mesh.FRONTSIDE,
-          },
-          this.scene
-        );
-        wall.material = wallMat;
-        wall.checkCollisions = true;
-        this.disposables.push(wall);
-      });
-    };
-
-    buildSide(-half, "left", "L");
-    buildSide(half, "right", "R");
+    const merged = boxes.length > 1 ? Mesh.MergeMeshes(boxes, true, true) : boxes[0];
+    if (merged) {
+      merged.name = `walls_${this.spec.index}${this.spec.forkBranch ?? ""}`;
+      merged.material = wallMat;
+      merged.checkCollisions = true;
+      this.disposables.push(merged);
+    } else {
+      // Слияние не удалось — остаются отдельные боксы (работает, просто дороже).
+      for (const box of boxes) {
+        box.material = wallMat;
+        box.checkCollisions = true;
+        this.disposables.push(box);
+      }
+    }
   }
 
   /**
@@ -256,303 +214,6 @@ export class SectionChunk {
     wall.material = wallMat;
     wall.checkCollisions = true;
     this.disposables.push(wall);
-  }
-
-  /**
-   * Ремонт стыка с предыдущей секцией: смена ширины коридора (расширение
-   * 8→24 на входе, сужение на вилках развилки) оставляет на плоскости стыка
-   * часть ширины ОДНОЙ из двух секций без пола/стены с другой стороны.
-   * Раньше это были ДВА разных случая с разной геометрией («уши» — низкий
-   * бордюр, и «рельсы» — полновысотная стена) со своей отдельной, слегка
-   * разной формулой для каждого. По факту это ОДНА и та же задача с двумя
-   * зеркальными исходами: щель = собственная ширина ТЕКУЩЕЙ секции минус
-   * пересечение с покрытием ПРЕДЫДУЩЕЙ (см. gapsAtJoint в
-   * SectionGeometry) — независимо от того, шире предыдущая секция или более узкая,
-   * считается и закрывается ОДНОЙ формулой, одной полновысотной стеной
-   * прямо в плоскости стыка. Без этой стены игрок либо проваливается,
-   * отступив вбок за кромку широкого пола перед сужением, либо делает шаг
-   * в сторону сразу после расширения — тоже в пустоту.
-   *
-   * У ВЕТОК РАЗВИЛКИ (spec.forkBranch) формула автоматически даёт пустой
-   * список щелей — отдельный случай не нужен: обе ветки в сумме ровно
-   * замащивают ширину родителя (см. TrackBuilder.appendFork), поэтому за
-   * пределами собственной ширины ветки всегда лежит пол СОСЕДНЕЙ ветки, а
-   * не пустота.
-   *
-   * У СЕКЦИЙ СО ШВОМ (spec.seam — схождение веток развилки, J) щель считает
-   * и закрывает buildSeam(): туда ветки подходят НЕ по касательной
-   * (расходящаяся дуга — см. FORK_DIVERGENCE_ANGLE), курс на стыке
-   * РАЗРЫВЕН, и прямая проекция gapsAtJoint для такого стыка систематически
-   * неточна (проецирует вдоль курса J, а не вдоль реального наклонного
-   * торца ветки). Рассинхрон между этой грубой прямой проекцией и точной
-   * геометрией шва и был вероятным источником то пропадавших, то лишних
-   * кусков стены именно на развилках — поэтому такие секции здесь
-   * пропускаются целиком, J получает стены РОВНО один раз, от buildSeam.
-   *
-   * Раньше здесь ещё чинился клиновидный зазор пола и щель в заборе на
-   * ВНЕШНЕЙ стороне изгиба (диск-заплатка по jointRadius) — секции были
-   * прямыми, и мгновенный поворот yaw на стыке буквально раздвигал два
-   * плоских прямоугольника под углом. Теперь секции — дуги ПОСТОЯННОЙ
-   * кривизны (см. SectionSpec.curvature), и соседние секции по построению
-   * ВСЕГДА встречаются с равным курсом (конец предыдущей = начало текущей) —
-   * ни клина, ни щели в заборе больше не возникает, чинить нечего.
-   */
-  private buildJointPatch(wallMat: StandardMaterial): void {
-    const spec = this.spec;
-    if (spec.index === 0 || spec.prevWidth <= 0 || spec.seam) return;
-
-    const gaps = gapsAtJoint(spec);
-    if (gaps.length === 0) return;
-
-    const perpX = Math.cos(spec.yaw);
-    const perpZ = -Math.sin(spec.yaw);
-    for (const gap of gaps) {
-      const width = gap.end - gap.start;
-      if (width <= 0.05) continue; // суб-сантиметровый хвост — численный шум, не реальная щель
-      const center = (gap.start + gap.end) / 2;
-      const seg = MeshBuilder.CreateBox(
-        `jointWall_${spec.index}_${gap.start.toFixed(2)}`,
-        { width, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
-        this.scene
-      );
-      seg.rotation.y = spec.yaw;
-      seg.position.set(
-        spec.start.x + perpX * center,
-        SectionChunk.WALL_HEIGHT / 2,
-        spec.start.z + perpZ * center
-      );
-      seg.material = wallMat;
-      seg.checkCollisions = true;
-      this.disposables.push(seg);
-    }
-  }
-
-  /**
-   * Торцевая стена тупиковой ветки развилки: за её торцом бездна — ветка ни с
-   * чем не стыкуется (у ниш аналогичная крышка уже есть — spurCap). Прямой
-   * бокс по торцу на конечном курсе ветки: тупик короткий, кривизна мала.
-   */
-  private buildDeadEndCap(wallMat: StandardMaterial): void {
-    if (!this.spec.isDeadEnd) return;
-    this.buildEndCap(wallMat, "branchCap", this.spec.length + 0.15);
-  }
-
-  /**
-   * Торцевая стена за входом ПЕРВОЙ секции (спавн): игрок не должен уйти
-   * назад за пределы мира — там пола нет.
-   */
-  private buildSpawnCap(wallMat: StandardMaterial): void {
-    if (this.spec.index !== 0) return;
-    this.buildEndCap(wallMat, "spawnCap", -0.15);
-  }
-
-  /**
-   * Фланги по фронту СЕКЦИИ ПОДХОДА к башне (tier 0): пол там 3× ширины, а
-   * башня (радиус ~2) стоит в центре в 2 м за кромкой — с флангов игрок мог бы
-   * обойти её и упасть с кромки в бездну. Закрываем полосы по бокам, оставляя
-   * центральный проём под башню (диаметр 4 + запас).
-   */
-  private buildApproachCap(wallMat: StandardMaterial): void {
-    if (this.spec.tier !== 0) return;
-    const half = this.spec.width / 2;
-    const gapHalf = 3;
-    if (half <= gapHalf) return;
-    const yaw = this.spec.yaw + this.spec.curvature * this.spec.length;
-    const z = this.spec.length + 0.3;
-    const flank = (localXc: number, w: number, tag: string) => {
-      const c = this.toWorld(localXc, z);
-      const wall = MeshBuilder.CreateBox(
-        `approachFlank_${this.spec.index}_${tag}`,
-        { width: w, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
-        this.scene
-      );
-      wall.position.set(c.x, SectionChunk.WALL_HEIGHT / 2, c.z);
-      wall.rotation.y = yaw;
-      wall.material = wallMat;
-      wall.checkCollisions = true;
-      this.disposables.push(wall);
-    };
-    flank(-(half + gapHalf) / 2, half - gapHalf, "L");
-    flank((half + gapHalf) / 2, half - gapHalf, "R");
-  }
-
-  private buildEndCap(wallMat: StandardMaterial, name: string, zLocal: number): void {
-    const endYaw = this.spec.yaw + this.spec.curvature * this.spec.length;
-    const capCenter = this.toWorld(0, zLocal);
-    const cap = MeshBuilder.CreateBox(
-      `${name}_${this.spec.index}`,
-      { width: this.spec.width + 0.2, height: SectionChunk.WALL_HEIGHT, depth: 0.3 },
-      this.scene
-    );
-    cap.position.set(capCenter.x, SectionChunk.WALL_HEIGHT / 2, capCenter.z);
-    cap.rotation.y = endYaw;
-    cap.material = wallMat;
-    cap.checkCollisions = true;
-    this.disposables.push(cap);
-  }
-
-  /**
-   * Геометрия шва «ветки → схождение» (spec.seam) — см. TrackBuilder.computeSeam.
-   * Заплата пола — лента между торцевой кромкой ветки (edgeA—edgeB) и линией
-   * входа J (lineA—lineB, нахлёст 0.5 м на пол J). Ограждение — если внешний
-   * угол кромки торчит за ширину J: перила по косому краю + продолжение стены
-   * J назад (закрывает «язык» пола ветки, за которым бездна). Задняя стена J —
-   * на линии входа в зазорах между проёмами веток (за кромками веток бездна).
-   */
-  private buildSeam(wallMat: StandardMaterial): void {
-    const seam = this.spec.seam;
-    if (!seam) return;
-    const jYaw = this.spec.yaw;
-    const J_HALF = this.spec.width / 2;
-    const WALL_H = SectionChunk.WALL_HEIGHT;
-    const RAIL_H = 1.0;
-    const mat = this.makeMaterial(`seamMat_${this.spec.index}`, SectionChunk.SEAM_RAIL_COLOR);
-    const toV3 = (p: { x: number; z: number }, y: number): Vector3 => {
-      const w = localToWorld(this.spec, p.x, p.z);
-      return new Vector3(w.x, y, w.z);
-    };
-
-    for (const patch of seam.patches) {
-      // Пол-заплата: лента из двух образующих (торец ветки → линия входа J).
-      const floor = MeshBuilder.CreateRibbon(
-        `seamFloor_${this.spec.index}_${patch.edgeA.x.toFixed(1)}_${patch.edgeB.x.toFixed(1)}`,
-        {
-          pathArray: [
-            [toV3(patch.edgeA, 0.02), toV3(patch.edgeB, 0.02)],
-            [toV3(patch.lineA, 0.02), toV3(patch.lineB, 0.02)],
-          ],
-          sideOrientation: Mesh.DOUBLESIDE,
-        },
-        this.scene
-      );
-      const floorMat = this.makeMaterial(`seamFloorMat_${this.spec.index}`, patch.color);
-      floor.material = floorMat;
-      floor.checkCollisions = true;
-      this.disposables.push(floor, floorMat);
-
-      // Ограждение: внешний угол за шириной J — перила вдоль косого края
-      // (от внешнего угла кромки до его проекции на стену J) + отрезок стены
-      // J от точки входа внешнего угла назад вдоль стены.
-      if (patch.outerCorner) {
-        const oc = patch.outerCorner;
-        const clampX = Math.sign(oc.x) * J_HALF;
-        // Уровень стены J, на котором кромка ветки её пересекает: z при x=±J_HALF.
-        const edge = [patch.edgeA, patch.edgeB];
-        const edgeX = edge[1].x - edge[0].x;
-        const edgeZ = edge[1].z - edge[0].z;
-        const tWall = (clampX - edge[0].x) / edgeX;
-        const zWall = edge[0].z + edgeZ * tWall;
-        // Перила: бокс между внешним углом кромки и стеной J — через CreateBox
-        // с шириной = зазор; направление отверстия уже вдоль оси X (перила
-        // перпендикулярны стене J, наклон кромки компенсируется тем, что зазор
-        // проецируется на X).
-        const rail = MeshBuilder.CreateBox(
-          `seamRail_${this.spec.index}_${oc.x > 0 ? "e" : "w"}`,
-          { width: Math.abs(oc.x - clampX), height: RAIL_H, depth: 0.25 },
-          this.scene
-        );
-        const rc = toV3({ x: (oc.x + clampX) / 2, z: (oc.z + zWall) / 2 }, RAIL_H / 2);
-        rail.position.set(rc.x, RAIL_H / 2, rc.z);
-        rail.rotation.y = jYaw + (oc.x > 0 ? Math.PI / 2 : -Math.PI / 2); // вдоль оси «поперёк J»
-        rail.material = mat;
-        rail.checkCollisions = true;
-        this.disposables.push(rail);
-        // Отрезок стены J от пересечения назад: точка (clampX, zWall) — уже на оси стены J.
-        if (zWall < -0.05) {
-          const wallBack = MeshBuilder.CreateBox(
-            `seamWallBack_${this.spec.index}_${oc.x > 0 ? "e" : "w"}`,
-            { width: 0.3, height: WALL_H, depth: Math.abs(zWall) },
-            this.scene
-          );
-          const wbCenter = toV3({ x: clampX, z: zWall / 2 }, WALL_H / 2);
-          wallBack.position.set(wbCenter.x, WALL_H / 2, wbCenter.z);
-          wallBack.rotation.y = jYaw;
-          wallBack.material = wallMat;
-          wallBack.checkCollisions = true;
-          this.disposables.push(wallBack);
-        }
-      }
-    }
-
-    // Задняя стена J: зазоры линии входа между проёмами веток.
-    for (let i = 0; i < seam.backWalls.length; i++) {
-      const bw = seam.backWalls[i];
-      const from = bw.from;
-      const to = bw.to;
-      const len = Math.hypot(to.x - from.x, to.z - from.z);
-      const c = toV3({ x: (from.x + to.x) / 2, z: 0.15 }, 0);
-      const wall = MeshBuilder.CreateBox(`seamBack_${this.spec.index}_${i}`, { width: len, height: WALL_H, depth: 0.3 }, this.scene);
-      wall.position.set(c.x, WALL_H / 2, c.z);
-      wall.rotation.y = jYaw;
-      wall.material = wallMat;
-      wall.checkCollisions = true;
-      this.disposables.push(wall);
-    }
-
-    this.disposables.push(mat);
-  }
-
-  /**
-   * Геометрия боковых ниш (SideSpurSpec) — см. WorldGenerator: КАЖДАЯ ниша
-   * самостоятельна, у неё собственные пол/стены/торцевая стена в СОБСТВЕННОЙ
-   * прямой (curvature=0) локальной системе координат (spur.start/spur.yaw),
-   * а не общий с родителем пол/стена, «прорезанные» дырой. Родитель и ниша
-   * физически соприкасаются РОВНО по плоскости проёма (доказательство: пол
-   * ниши начинается в тех же мировых точках, где buildWalls вырезал проём
-   * в стене родителя, — см. wallSegments) — не склеены, а состыкованы.
-   */
-  private buildSideSpursEnvironment(wallMat: StandardMaterial): void {
-    for (const spur of this.spec.sideSpurs) this.buildSideSpurGeometry(spur, wallMat);
-  }
-
-  private buildSideSpurGeometry(spur: SideSpurSpec, wallMat: StandardMaterial): void {
-    const frame = { start: spur.start, yaw: spur.yaw, curvature: 0 };
-    const at = (x: number, z: number) => localToWorld(frame, x, z);
-    const half = spur.width / 2;
-    const h = SectionChunk.WALL_HEIGHT;
-    const v = (p: { x: number; z: number }, y: number) => new Vector3(p.x, y, p.z);
-
-    const doorL = at(-half, 0);
-    const doorR = at(half, 0);
-    const farL = at(-half, spur.length);
-    const farR = at(half, spur.length);
-
-    const floorMat = this.makeMaterial(`spurFloorMat_${spur.id}`, this.spec.color);
-    const floor = MeshBuilder.CreateRibbon(
-      `spurFloor_${spur.id}`,
-      { pathArray: [[v(doorL, 0), v(farL, 0)], [v(doorR, 0), v(farR, 0)]], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    floor.material = floorMat;
-    floor.checkCollisions = true;
-
-    const wallL = MeshBuilder.CreateRibbon(
-      `spurWallL_${spur.id}`,
-      { pathArray: [[v(doorL, 0), v(farL, 0)], [v(doorL, h), v(farL, h)]], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    wallL.material = wallMat;
-    wallL.checkCollisions = true;
-
-    const wallR = MeshBuilder.CreateRibbon(
-      `spurWallR_${spur.id}`,
-      { pathArray: [[v(doorR, 0), v(farR, 0)], [v(doorR, h), v(farR, h)]], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    wallR.material = wallMat;
-    wallR.checkCollisions = true;
-
-    // Торцевая стена — тупик закрыт (в отличие от тупика развилки, у ниши
-    // никогда не бывает продолжения).
-    const cap = MeshBuilder.CreateRibbon(
-      `spurCap_${spur.id}`,
-      { pathArray: [[v(farL, 0), v(farR, 0)], [v(farL, h), v(farR, h)]], sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    cap.material = wallMat;
-    cap.checkCollisions = true;
-
-    this.disposables.push(floor, floorMat, wallL, wallR, cap);
   }
 
   /**
@@ -598,7 +259,7 @@ export class SectionChunk {
   /**
    * Граница коридора вместо плоской чёрной стены (по фидбэку) — случайный
    * стиль на секцию: густые кусты, металлический забор или скальная гряда.
-   * Реальный коллайдер — тонкая невидимая-под-декором стена в buildWalls();
+   * Реальный коллайдер — тонкая невидимая-под-декором стена из buildBoundaryWalls();
    * эти меши чисто декоративные, коллизий не имеют.
    */
   private buildBorder(seeds: ScatterSeed[]): void {
