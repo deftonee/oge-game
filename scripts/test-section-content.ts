@@ -38,7 +38,6 @@ function makeSpec(index: number, tier = 2, length = 40, width = 24): SectionSpec
     yaw: 0,
     curvature: 0,
     gates: [],
-    partitionDepth: 0,
     witches: [],
     bonfires: [],
     practiceTargets: [],

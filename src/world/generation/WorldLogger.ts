@@ -23,7 +23,7 @@ export function logWorldSpec(world: WorldSpec, seed: number): void {
       .join(" | ");
     // eslint-disable-next-line no-console
     console.log(
-      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} partitionDepth=${s.partitionDepth.toFixed(2)} gates=[${gates || "-"}] entities=w${s.witches.length}/b${s.bonfires.length}/p${s.practiceTargets.length}/c${s.chests.length}/spur${s.sideSpurs.length}`
+      `${tag} #${s.index} tier=${s.tier} "${s.color}" border=${s.borderStyle} yaw=${s.yaw.toFixed(3)} curvature=${s.curvature.toFixed(4)} start=(${s.start.x.toFixed(2)},${s.start.z.toFixed(2)}) end=(${s.end.x.toFixed(2)},${s.end.z.toFixed(2)}) width=${s.width} length=${s.length.toFixed(2)} forkBranch=${s.forkBranch ?? "-"}${s.isDeadEnd ? "(dead)" : ""} gates=[${gates || "-"}] entities=w${s.witches.length}/b${s.bonfires.length}/p${s.practiceTargets.length}/c${s.chests.length}/spur${s.sideSpurs.length}`
     );
   }
   // eslint-disable-next-line no-console

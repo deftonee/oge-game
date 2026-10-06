@@ -6,6 +6,7 @@
  *  1. Стены держат: из точки в метре внутри от кусочка стены давим наружу (и под
  *     углом ±30°) — игрок не должен ни выйти за границу пола, ни упасть.
  *  3. Любой кусок пола (в т.ч. заплатки шва, ниши, площадка) держит стоящего игрока.
+ *  4. Между ветками развилки нельзя перейти (разделяющая стена/клин бездны).
  *  2. Коридоры проходимы: вдоль оси каждой полосы (секции/ветки) игрок доходит
  *     от начала до конца — внутри пола нет «лишних» стен.
  *
@@ -16,6 +17,7 @@
 import { NullEngine, Scene, MeshBuilder, Vector3 } from "@babylonjs/core";
 import { generateWorld } from "../src/world/WorldGenerator";
 import { FootprintIndex } from "../src/world/geometry/Footprint";
+import { localToWorld } from "../src/world/geometry/SectionGeometry";
 import { SectionChunk } from "../src/world/SectionChunk";
 import { GameState } from "../src/core/GameState";
 
@@ -45,6 +47,7 @@ let wallsPushed = 0;
 let wallsSkipped = 0;
 let corridorsWalked = 0;
 let floorsStood = 0;
+let dividerProbes = 0;
 
 for (let seed = 1; seed <= SEEDS; seed++) {
   const scene = new Scene(engine);
@@ -158,12 +161,42 @@ for (let seed = 1; seed <= SEEDS; seed++) {
     floorsStood++;
   }
 
+  // --- 4. Ветки развилки разделены: из одной в другую не пройти ---
+  // Игрок стоит на оси ветки и давит строго в сторону оси соседней ветки на той же
+  // глубине. Ворота открыты (иначе их барьер сам бы не пускал), поэтому между
+  // ветками держит только разделяющая стена/клин бездны — так же, как в игре.
+  for (const a of world.sections) {
+    if (a.forkBranch !== "a") continue;
+    const b = world.sections.find((o) => o.forkBranch === "b" && o.forkParentIndex === a.forkParentIndex);
+    if (!b) continue;
+    const depth = Math.min(a.length, b.length);
+    for (let z = 0.5; z <= depth - 3; z += 1.5) {
+      for (const [from, to] of [[a, b], [b, a]] as const) {
+        const p0 = localToWorld(from, 0, z);
+        const p1 = localToWorld(to, 0, z);
+        const d = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+        const dx = (p1.x - p0.x) / d;
+        const dz = (p1.z - p0.z) / d;
+        place(p0.x, p0.z);
+        for (let i = 0; i < Math.ceil(d / 0.08) + 40; i++) step(dx * 0.08, dz * 0.08);
+        const q = player.position;
+        const crossed = q.y > GROUND_MIN_Y && Math.hypot(q.x - p1.x, q.z - p1.z) < d * 0.35;
+        check(
+          !crossed,
+          `seed ${seed}: игрок прошёл из ветки ${from.forkBranch} в ветку ${to.forkBranch} развилки ${a.forkParentIndex} на глубине ${z.toFixed(1)} м — между ветками нет стены`
+        );
+        dividerProbes++;
+      }
+    }
+  }
+
   scene.dispose();
 }
 
 console.log = realLog;
+check(dividerProbes > 20, `проверено слишком мало проб через разделитель веток: ${dividerProbes}`);
 check(wallsPushed > 100, `протестировано слишком мало кусков стены: ${wallsPushed}`);
-console.log(`Сидов: ${SEEDS}, кусков стены продавлено: ${wallsPushed} (пропущено из-за тесноты: ${wallsSkipped}), коридоров пройдено: ${corridorsWalked}, полов проверено на стояние: ${floorsStood}`);
+console.log(`Сидов: ${SEEDS}, кусков стены продавлено: ${wallsPushed} (пропущено из-за тесноты: ${wallsSkipped}), коридоров пройдено: ${corridorsWalked}, полов проверено на стояние: ${floorsStood}, проб через разделитель веток: ${dividerProbes}`);
 console.log(`Проверок: ${checks}, провалов: ${failures}`);
 if (failures > 0) {
   console.error("FAILED: настоящие коллизии пропускают сквозь стены или стены стоят посреди коридора");

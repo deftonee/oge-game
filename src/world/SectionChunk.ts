@@ -102,7 +102,6 @@ export class SectionChunk {
     // отдельные заплатки.
     this.buildFloors();
     this.buildBoundaryWalls(wallMat);
-    this.buildPartition(wallMat);
     this.buildScatter(this.spec.grass, "grass");
     this.buildScatter(this.spec.bushes, "bush");
     this.buildBorder(this.spec.borderLeft);
@@ -193,27 +192,6 @@ export class SectionChunk {
         this.disposables.push(box);
       }
     }
-  }
-
-  /**
-   * Стена-разделитель развилки: делит начало секции на два рукава (левый и
-   * правый), продолжая плоскость между двумя барьерами выходных ворот. После
-   * partitionDepth метров стена кончается, и секция снова открывается целиком.
-   */
-  private buildPartition(wallMat: StandardMaterial): void {
-    if (this.spec.partitionDepth <= 0) return;
-    const center = this.toWorld(0, this.spec.partitionDepth / 2);
-
-    const wall = MeshBuilder.CreateBox(
-      `partition_${this.spec.index}`,
-      { width: 0.3, height: 2.5, depth: this.spec.partitionDepth },
-      this.scene
-    );
-    wall.rotation.y = this.spec.yaw;
-    wall.position.set(center.x, 1.25, center.z);
-    wall.material = wallMat;
-    wall.checkCollisions = true;
-    this.disposables.push(wall);
   }
 
   /**

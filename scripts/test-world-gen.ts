@@ -8,7 +8,7 @@ import {
   DEADEND_LENGTH,
   FORK_BRANCH_LENGTH,
   FORK_DIVERGENCE_ANGLE,
-  FORK_GATE_FRACTION,
+  FORK_SPLIT_MAX_FRACTION,
   GATE_WALL_OVERLAP,
   SIDE_SPUR_WIDTH,
   SIDE_SPUR_LENGTH,
@@ -47,7 +47,6 @@ for (let seed = 1; seed <= 200; seed++) {
   const sections = world.sections;
 
   check(sections.length >= 5, `seed ${seed}: мир слишком короткий`);
-  check(sections.every((s) => s.partitionDepth === 0), `seed ${seed}: стена-разделитель больше не нужна`);
 
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
@@ -66,7 +65,11 @@ for (let seed = 1; seed <= 200; seed++) {
       check(s.curvature === 0, `seed ${seed}: первая секция (мягкий онбординг) должна быть прямой`);
     } else if (isBranch) {
       // Параллельный коридор-ветка развилки (проходная ИЛИ тупиковая)
-      check(s.width === SECTION_WIDTH / 2, `seed ${seed}: ширина ветки = половина коридора (${s.width})`);
+      {
+        const minW = SECTION_WIDTH / 2 - SECTION_WIDTH * FORK_SPLIT_MAX_FRACTION;
+        const maxW = SECTION_WIDTH / 2 + SECTION_WIDTH * FORK_SPLIT_MAX_FRACTION;
+        check(s.width >= minW - 1e-9 && s.width <= maxW + 1e-9, `seed ${seed}: ширина ветки вне диапазона [${minW}, ${maxW}] (${s.width})`);
+      }
       if (s.isDeadEnd) {
         check(
           s.length >= DEADEND_LENGTH.min && s.length <= DEADEND_LENGTH.max,
@@ -78,15 +81,13 @@ for (let seed = 1; seed <= 200; seed++) {
         check(s.gates.length === 0, `seed ${seed}: ветка заканчивается свободным входом в схождение`);
       }
       check(!!s.forkGateId && s.forkParentIndex !== undefined, `seed ${seed}: ветка без привязки к воротам`);
-      // Ветки больше не прямые (curvature=0) — они расходятся зеркальной
-      // дугой (см. FORK_DIVERGENCE_ANGLE): скорость поворота (рад/м) должна
-      // лежать в диапазоне angle/branchLen для ЛЮБОЙ длины реальной ветки
-      // (тупиковая использует ту же скорость, просто короче — см. mkBranch).
-      const minRate = FORK_DIVERGENCE_ANGLE.min / FORK_BRANCH_LENGTH.max;
+      // Каждая ветка уходит под СВОИМ углом (см. FORK_DIVERGENCE_ANGLE): бывает почти
+      // прямая. Скорость поворота (рад/м) не больше max/минимальной длины ветки;
+      // знак и суммарное расхождение проверяются по паре веток ниже.
       const maxRate = FORK_DIVERGENCE_ANGLE.max / FORK_BRANCH_LENGTH.min;
       check(
-        Math.abs(s.curvature) >= minRate - 1e-9 && Math.abs(s.curvature) <= maxRate + 1e-9,
-        `seed ${seed}: скорость расхождения ветки вне диапазона (curvature=${s.curvature.toFixed(5)})`
+        Math.abs(s.curvature) <= maxRate + 1e-9,
+        `seed ${seed}: скорость расхождения ветки выше предела (curvature=${s.curvature.toFixed(5)})`
       );
     } else if (!isApproach) {
       // Обычная стволовая секция или схождение J
@@ -193,11 +194,19 @@ for (let seed = 1; seed <= 200; seed++) {
         check(ga.fork === true && gb.fork === true, `seed ${seed}: ворота настоящей развилки должны быть односторонними`);
       }
       check(ga.schoolId !== gb.schoolId, `seed ${seed}: два барьера развилки — разные школы`);
-      check(Math.abs(Math.abs(ga.x) - s.width / 4) < 1e-9 && Math.abs(Math.abs(gb.x) - s.width / 4) < 1e-9, `seed ${seed}: x барьеров = ±w/4`);
-      check(
-        Math.abs(ga.width - (s.width * FORK_GATE_FRACTION + GATE_WALL_OVERLAP)) < 1e-9,
-        `seed ${seed}: ширина барьера = половина коридора + нахлёст`
-      );
+      {
+        // Ворота делят линию выхода в одной точке split без щели, каждые закрывают
+        // ширину СВОЕЙ ветки (+ нахлёст), а ветки не уже минимальной и не шире максимальной.
+        const half = s.width / 2;
+        const wA = ga.width - GATE_WALL_OVERLAP;
+        const wB = gb.width - GATE_WALL_OVERLAP;
+        const minW = s.width / 2 - s.width * FORK_SPLIT_MAX_FRACTION;
+        check(ga.x < gb.x, `seed ${seed}: ворота A должны быть левее ворот B`);
+        check(Math.abs(ga.x - wA / 2 + half) < 1e-9, `seed ${seed}: левые ворота не начинаются от левой стены`);
+        check(Math.abs(gb.x + wB / 2 - half) < 1e-9, `seed ${seed}: правые ворота не доходят до правой стены`);
+        check(Math.abs(ga.x + wA / 2 - (gb.x - wB / 2)) < 1e-9, `seed ${seed}: ворота развилки не стыкуются в одной точке раздела`);
+        check(wA >= minW - 1e-9 && wB >= minW - 1e-9, `seed ${seed}: ветка уже минимальной (${wA.toFixed(2)}, ${wB.toFixed(2)})`);
+      }
       // Полнота покрытия пролёта: объединение обоих барьеров должно без щели
       // закрыть ВСЮ ширину секции [-half, half] — иначе на границе стены и
       // барьера (или между двумя барьерами по центру) остаётся непростреленная
@@ -236,14 +245,38 @@ for (let seed = 1; seed <= 200; seed++) {
           Math.abs(a.yaw - parentEndYaw) < 1e-9 && Math.abs(b.yaw - parentEndYaw) < 1e-9,
           `seed ${seed}: ветки не продолжают курс родителя на его конце`
         );
-        // Ветки расходятся ЗЕРКАЛЬНО: общая по модулю скорость поворота,
-        // противоположный знак (см. FORK_DIVERGENCE_ANGLE и curvatureA/B в
-        // генераторе) — это и есть "разные стороны", а не "обе прямые".
-        check(a.curvature !== 0 && b.curvature !== 0, `seed ${seed}: ветки должны расходиться (curvature=0 больше не ожидается)`);
+        // Направление: A стартует слева и уходит влево или идёт прямо (curvature<=0), B —
+        // вправо или прямо (>=0). Обратный знак даёт СХОДЯЩИЕСЯ ветки: полы накладываются,
+        // разделяющей стены между ними нет (обход ворот). Угол — кривизна * длина полной ветки.
+        const full = a.isDeadEnd ? b : a;
+        const angleA = -a.curvature * full.length;
+        const angleB = b.curvature * full.length;
         check(
-          Math.abs(a.curvature + b.curvature) < 1e-9,
-          `seed ${seed}: ветки должны расходиться ЗЕРКАЛЬНО (curvature противоположного знака, той же величины)`
+          angleA >= -1e-9 && angleB >= -1e-9,
+          `seed ${seed}: ветки должны РАСХОДИТЬСЯ (A влево, B вправо), а не сходиться (A=${a.curvature.toFixed(5)}, B=${b.curvature.toFixed(5)})`
         );
+        check(
+          angleA + angleB >= FORK_DIVERGENCE_ANGLE.min * 2 - 1e-9,
+          `seed ${seed}: суммарное расхождение веток мало (${(angleA + angleB).toFixed(3)} рад)`
+        );
+        check(
+          angleA <= FORK_DIVERGENCE_ANGLE.max + 1e-9 && angleB <= FORK_DIVERGENCE_ANGLE.max + 1e-9,
+          `seed ${seed}: угол ветки выше предела (A=${angleA.toFixed(3)}, B=${angleB.toFixed(3)})`
+        );
+        check(Math.abs(a.width + b.width - s.width) < 1e-9, `seed ${seed}: ветки не делят ширину родителя без остатка (${a.width}+${b.width})`);
+        check(
+          Math.abs(a.width - (s.gates[0].width - GATE_WALL_OVERLAP)) < 1e-9 && Math.abs(b.width - (s.gates[1].width - GATE_WALL_OVERLAP)) < 1e-9,
+          `seed ${seed}: ширина ветки не совпадает с шириной её ворот`
+        );
+        // Прямое следствие: оси веток на одной глубине ни разу не ближе ширины ветки.
+        for (let z = 0; z <= Math.min(a.length, b.length); z += 1) {
+          const pa = localToWorld(a, 0, z);
+          const pb = localToWorld(b, 0, z);
+          check(
+            Math.hypot(pa.x - pb.x, pa.z - pb.z) >= (a.width + b.width) / 2 - 1e-6,
+            `seed ${seed}: ветки развилки ${s.index} пересекаются на глубине ${z} м (оси ближе ширины ветки)`
+          );
+        }
         check(
           !(a.isDeadEnd && b.isDeadEnd),
           `seed ${seed}: у развилки ${s.index} обе ветки тупиковые — тогда дальше пути вообще нет`
@@ -339,23 +372,17 @@ for (let seed = 1; seed <= 200; seed++) {
         check(Math.abs(Math.hypot(dx, dz) - SECTION_WIDTH / 2) < 1e-6, `seed ${seed}: смещение веток = w/2`);
       }
 
-      // Регрессия: ветка обязана НАЧИНАТЬСЯ у КОНЦА родителя (где стоят её
-      // ворота), а не поверх его собственного коридора. Раньше это ловилось
-      // проекцией на ось родителя (совпадала с parent.length) — но родитель
-      // теперь сам может изгибаться по своей длине, и проекция через
-      // константный курс НАЧАЛА родителя перестаёт быть точной мерой
-      // "пройденного расстояния" вдоль дуги. Проверяем вместо этого напрямую
-      // (не зависит от кривизны): начало ветки лежит РОВНО в SECTION_WIDTH/4
-      // от КОНЦА родителя (её боковое смещение при построении) — а не где-то
-      // в районе parent.length от его начала, как было бы при баге со стартом
-      // от cursor вместо end.
+      // Регрессия: ветка обязана НАЧИНАТЬСЯ у КОНЦА родителя (где стоят её ворота), а не
+      // поверх его собственного коридора. Центр старта ветки лежит на линии выхода родителя
+      // ровно там, где центр её ворот (|gate.x| от конца родителя), — не зависит от кривизны.
       const parent = sections.find((o) => o.index === s.forkParentIndex);
       if (parent) {
+        const gate = parent.gates.find((g) => g.id === s.forkGateId);
         const distFromParentEnd = Math.hypot(s.start.x - parent.end.x, s.start.z - parent.end.z);
         check(
-          Math.abs(distFromParentEnd - SECTION_WIDTH / 4) < 1e-6,
-          `seed ${seed}: ветка ${s.index} накладывается на коридор родителя ${parent.index} ` +
-            `(начало ветки в ${distFromParentEnd.toFixed(1)} м от конца родителя вместо ${(SECTION_WIDTH / 4).toFixed(1)})`
+          !!gate && Math.abs(distFromParentEnd - Math.abs(gate!.x)) < 1e-6,
+          `seed ${seed}: ветка ${s.index} стартует не у центра своих ворот ` +
+            `(в ${distFromParentEnd.toFixed(1)} м от конца родителя, ворота на x=${gate ? gate.x.toFixed(1) : "?"})`
         );
       }
     }

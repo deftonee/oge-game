@@ -18,6 +18,8 @@ import {
   FIRST_SECTION_WIDTH,
   FORK_BRANCH_LENGTH,
   FORK_DIVERGENCE_ANGLE,
+  FORK_JOIN_END_MARGIN,
+  FORK_SPLIT_MAX_FRACTION,
   FORK_PROBABILITY,
   MAX_BEND,
   MAX_YAW,
@@ -182,40 +184,72 @@ export class TrackBuilder {
    */
   private appendFork(parent: SectionSpec, end: Vec2, tier: number, deadEnd: boolean): SectionSpec[] {
     const rand = this.rand;
-    this.gatePlanner.assignExitGates(parent, true, !deadEnd);
+
+    // Точка раздела линии выхода родителя: ворота и ветки за ними НЕ делят коридор
+    // ровно пополам. Левая ветка (A) занимает [-w/2, split], правая (B) — [split, w/2];
+    // split случаен, поэтому бывает узкая ветка и широкая, и стартуют они не
+    // симметрично. Ворота строятся ПО ТЕМ ЖЕ границам — выбор ворот = выбор ветки.
+    const parentWidth = parent.width;
+    const split = randRange(rand, -parentWidth * FORK_SPLIT_MAX_FRACTION, parentWidth * FORK_SPLIT_MAX_FRACTION);
+    this.gatePlanner.assignExitGates(parent, true, !deadEnd, split);
+    const widthA = parentWidth / 2 + split;
+    const widthB = parentWidth / 2 - split;
+    const centerA = (split - parentWidth / 2) / 2; // локальный x центра старта ветки
+    const centerB = (split + parentWidth / 2) / 2;
 
     const branchLen = randRange(rand, FORK_BRANCH_LENGTH.min, FORK_BRANCH_LENGTH.max);
     const dirX = Math.sin(this.currentYaw);
     const dirZ = Math.cos(this.currentYaw);
     const perpX = Math.cos(this.currentYaw);
     const perpZ = -Math.sin(this.currentYaw);
-    const off = SECTION_WIDTH / 4;
     const branchTier = Math.min(3, tier + 1);
     // Какая из двух дверей — тупик (если это вообще тупик).
     const deadSlot: "a" | "b" | null = deadEnd ? (rand() < 0.5 ? "a" : "b") : null;
 
-    // Ветки расходятся в РАЗНЫЕ стороны — ЗЕРКАЛЬНАЯ случайная дуга (величина
-    // общая, знак противоположный): при curvature_B = -curvature_A конец ветки B
-    // — точное зеркало конца A относительно оси родителя, чем и обусловлена
-    // стыковка обеих веток с плоской кромкой J.
-    const divergeAngle = randRange(rand, FORK_DIVERGENCE_ANGLE.min, FORK_DIVERGENCE_ANGLE.max);
-    const divergeSign = rand() < 0.5 ? 1 : -1;
-    const curvatureA = (-divergeSign * divergeAngle) / branchLen;
-    const curvatureB = (divergeSign * divergeAngle) / branchLen;
+    // Каждая ветка уходит от оси на СВОЙ угол (рад): бывает почти прямая и круто
+    // уходящая в сторону. A (слева) ВСЕГДА уходит влево, B (справа) — вправо
+    // (положительная кривизна поворачивает в +x). Знак НЕЛЬЗЯ выбирать случайно:
+    // при обратном знаке ветки сходятся и пересекаются, их полы накладываются,
+    // между ними нет границы — а значит и разделяющей стены, и можно перейти из
+    // одной ветки в другую в обход закрытых ворот. Расходящиеся ветки разделены
+    // клином бездны, стены по его краям выводит FootprintIndex.
+    //
+    // Предел угла: конец оси ветки обязан остаться внутри ширины J (иначе ветка
+    // впадает в схождение краем). Снос конца оси не больше branchLen*angle/2, значит
+    // для ветки со стартом на |x|=c угол не больше 2*(J_HALF - запас - c)/branchLen.
+    // Узкая ветка у края (большой |c|) поэтому уходит под меньшим углом.
+    const joinHalf = SECTION_WIDTH / 2;
+    const capOf = (center: number): number =>
+      Math.min(FORK_DIVERGENCE_ANGLE.max, (2 * (joinHalf - FORK_JOIN_END_MARGIN - Math.abs(center))) / branchLen);
+    const capA = capOf(centerA);
+    const capB = capOf(centerB);
+    let angleA = randRange(rand, 0, capA);
+    let angleB = randRange(rand, 0, capB);
+    // Суммарное расхождение не меньше 2*min: добираем недостающее у обеих веток
+    // пропорционально их запасу до предела (суммы пределов на это хватает всегда).
+    const deficit = FORK_DIVERGENCE_ANGLE.min * 2 - (angleA + angleB);
+    if (deficit > 0) {
+      const roomA = capA - angleA;
+      const roomB = capB - angleB;
+      angleA += (deficit * roomA) / (roomA + roomB);
+      angleB += (deficit * roomB) / (roomA + roomB);
+    }
+    const curvatureA = -angleA / branchLen;
+    const curvatureB = angleB / branchLen;
 
     // ВАЖНО: ветки и J начинаются у КОНЦА родителя (где стоят её ворота), а не
     // у this.cursor: на этом шаге cursor всё ещё указывает на НАЧАЛО parent.
-    const mkBranch = (branch: "a" | "b", sign: number, gateId: string): SectionSpec => {
+    const mkBranch = (branch: "a" | "b", center: number, width: number, gateId: string): SectionSpec => {
       const isDead = branch === deadSlot;
       const branchLength = isDead ? randRange(rand, DEADEND_LENGTH.min, DEADEND_LENGTH.max) : branchLen;
       const thisTier = isDead ? tier : branchTier;
       const curvature = branch === "a" ? curvatureA : curvatureB;
-      const start = { x: end.x - perpX * off * sign, z: end.z - perpZ * off * sign };
+      const start = { x: end.x + perpX * center, z: end.z + perpZ * center };
       const branchEnd = localToWorld({ start, yaw: this.currentYaw, curvature }, 0, branchLength);
       const spec = this.factory.create(
         this.currentSpecIndex + 1,
         thisTier,
-        SECTION_WIDTH / 2,
+        width,
         branchLength,
         start,
         branchEnd,
@@ -229,8 +263,8 @@ export class TrackBuilder {
       this.assemble(spec, false);
       return spec;
     };
-    const branchA = mkBranch("a", 1, parent.gates[0].id);
-    const branchB = mkBranch("b", -1, parent.gates[1].id);
+    const branchA = mkBranch("a", centerA, widthA, parent.gates[0].id);
+    const branchB = mkBranch("b", centerB, widthB, parent.gates[1].id);
 
     // Общая секция-схождение: вход J — на исходной оси parent'а, на «глубине»
     // branchLen — там встречаются обе разошедшиеся ветки.

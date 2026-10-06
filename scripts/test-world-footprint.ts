@@ -242,6 +242,23 @@ function verifyWorld(seedNum: number, label: string, world: WorldSpec): void {
     check(tz * cx - tx * cz > 0, `seed ${seed} ${p.id}: лента пола смотрит ВНИЗ — по ней нельзя стоять`);
   }
 
+  // --- A00: ветки одной развилки не накладываются друг на друга ---
+  // Наложенные полы дают «общий» пол без границы между ветками: разделяющей стены
+  // нет, из одной ветки можно перейти в другую в обход закрытых ворот.
+  for (const pa of index.pieces) {
+    if (!/^strip_\d+a$/.test(pa.id)) continue; // полоса ветки A
+    const pb = index.pieces.find((q) => q.id === pa.id.replace(/a$/, "b"));
+    if (!pb) continue;
+    const [ra, rb] = pa.rails;
+    for (let i = 0; i < ra.length; i++) {
+      for (const t of [0.1, 0.5, 0.9]) {
+        const x = ra[i].x + (rb[i].x - ra[i].x) * t;
+        const z = ra[i].z + (rb[i].z - ra[i].z) * t;
+        check(!insideDeep(pb, x, z, 0.05), `seed ${seed} ${pa.id}/${pb.id}: ветки развилки ПЕРЕСЕКАЮТСЯ у (${x.toFixed(2)},${z.toFixed(2)})`);
+      }
+    }
+  }
+
   // --- A1/A2: каждый кусок стены стоит на границе и не кусает пол ---
   for (const w of walls) {
     if (w.t < 0.3 - 1e-9) thinCount++;

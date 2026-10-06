@@ -2,7 +2,7 @@ import { ALL_SPELLS, getSpellsBySchool } from "../../data/spells";
 import type { GameState } from "../../core/GameState";
 import type { SectionSpec } from "../spec/SectionSpec";
 import type { RandomFn } from "../math/Rng";
-import { FORK_GATE_FRACTION, GATE_WALL_OVERLAP } from "./WorldGenConfig";
+import { GATE_WALL_OVERLAP } from "./WorldGenConfig";
 
 /**
  * Планировщик выходных ворот секции: уровень барьера (число тем) и тематика
@@ -40,19 +40,24 @@ export class GatePlanner {
   /**
    * Назначает выходные ворота секции: forceFork=true — принудительно развилка
    * (двое ворот). oneWay управляет ТОЛЬКО односторонним блоком за барьерами
-   * развилки (см. EnergyGate) — сама раскладка (x=±w/4) не зависит от него.
+   * развилки (см. EnergyGate) — раскладка от него не зависит.
    * У настоящей развилки oneWay=true; у развилки-тупика oneWay=false.
+   * split — смещение точки раздела двух ворот от оси секции (м, только у развилки):
+   * левые ворота закрывают [-w/2, split], правые — [split, w/2]; ветки за ними
+   * ровно той же ширины, поэтому ворота всегда совпадают со своими ветками.
    */
-  public assignExitGates(spec: SectionSpec, forceFork: boolean, oneWay: boolean = true): void {
+  public assignExitGates(spec: SectionSpec, forceFork: boolean, oneWay: boolean = true, split: number = 0): void {
     const fork = forceFork;
     const schools = this.pickSchools(fork ? 2 : 1);
     const required = GatePlanner.requiredSpells(spec.tier, ALL_SPELLS.length);
 
     if (fork) {
-      const gateWidth = spec.width * FORK_GATE_FRACTION + GATE_WALL_OVERLAP;
+      const half = spec.width / 2;
+      const widthA = half + split;
+      const widthB = half - split;
       spec.gates = [
-        { id: `gate-${spec.index}-a`, requiredSpells: required, schoolId: schools[0] ?? null, x: -spec.width / 4, width: gateWidth, fork: oneWay },
-        { id: `gate-${spec.index}-b`, requiredSpells: required, schoolId: schools[1] ?? schools[0] ?? null, x: spec.width / 4, width: gateWidth, fork: oneWay },
+        { id: `gate-${spec.index}-a`, requiredSpells: required, schoolId: schools[0] ?? null, x: (split - half) / 2, width: widthA + GATE_WALL_OVERLAP, fork: oneWay },
+        { id: `gate-${spec.index}-b`, requiredSpells: required, schoolId: schools[1] ?? schools[0] ?? null, x: (split + half) / 2, width: widthB + GATE_WALL_OVERLAP, fork: oneWay },
       ];
     } else {
       spec.gates = [{ id: `gate-${spec.index}`, requiredSpells: required, schoolId: schools[0] ?? null, x: 0, width: spec.width + GATE_WALL_OVERLAP }];

@@ -36,7 +36,6 @@ export class SectionFactory {
       yaw: sectionYaw,
       curvature,
       gates: [],
-      partitionDepth: 0,
       witches: [],
       bonfires: [],
       practiceTargets: [],
