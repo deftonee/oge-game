@@ -38,7 +38,7 @@ export class SideSpurExtender implements SectionExtender {
 
     const doorZ = randRange(rng, SIDE_SPUR_MARGIN, spec.length - SIDE_SPUR_MARGIN);
     const side: "left" | "right" = rng() < 0.5 ? "left" : "right";
-    // Нечем наградить (весь лор собран) или некому напасть (школы/темы
+    // Нечем наградить (весь лор найден) или некому напасть (школы/темы
     // недоступны на этом tier) — ниша в этот раз не появляется.
     const content = this.builder.buildSideSpurContent(spec.tier);
     if (!content) return;
@@ -69,8 +69,9 @@ export class SideSpurExtender implements SectionExtender {
         id: ctx.ids.nextChest(),
         x: randRange(rng, -(half - 1), half - 1),
         z: spurLength - 1.6,
-        bookIds: [content.book.bookId],
-        pageIds: content.book.pageIds,
+        bookIds: [],
+        pageIds: [],
+        dynamic: { slots: content.chestSlots },
       },
     });
 

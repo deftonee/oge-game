@@ -6,26 +6,31 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { Book, getBookById } from "../data/books";
+import { Book, BookPage, getBookById, getBookPageById } from "../data/books";
 import { GameState } from "../core/GameState";
+import { resolveChestLoot } from "../learning/chestLoot";
 
 export interface ChestOptions {
   id: string;
+  /** Точное содержимое (рукописные сундуки). У динамических сундуков пусто. */
   bookIds: string[];
   pageIds?: string[];
+  /** Динамический сундук: содержимое подбирается при открытии под состояние игрока. */
+  dynamicSlots?: number;
 }
 
 export interface ChestContents {
   books: Book[];
-  pageIds: string[];
+  pages: BookPage[];
 }
 
 /**
- * Сундук с обучающим материалом.
+ * Сундук с обучающим материалом: книгами (ветки прокачки) и страницами
+ * (заклинания). Что именно внутри — решает resolveChestLoot при открытии.
  *
- * Entity отвечает только за модель и содержимое.
- * Факт открытия хранится в GameState, чтобы состояние переживало
- * пересборку секции WorldStreamer.
+ * Entity отвечает только за модель и открытие. Факт открытия и найденное
+ * хранятся в GameState, чтобы состояние переживало пересборку секции
+ * WorldStreamer.
  */
 export class Chest {
   public readonly root: TransformNode;
@@ -54,23 +59,39 @@ export class Chest {
     return this.opened;
   }
 
+  /**
+   * Содержимое: у открытого сундука — то, что в нём нашли (хранится в GameState);
+   * у закрытого рукописного — то, что в нём указано; у закрытого динамического — пусто
+   * (оно ещё не определено).
+   */
   public getContents(): ChestContents {
+    const loot = this.gameState.getChestLoot(this.id) ?? {
+      bookIds: this.opts.bookIds,
+      pageIds: this.opts.pageIds ?? [],
+    };
     return {
-      books: this.opts.bookIds
-        .map((id) => getBookById(id))
-        .filter((book): book is Book => !!book),
-      pageIds: [...(this.opts.pageIds ?? [])],
+      books: loot.bookIds.map((id) => getBookById(id)).filter((b): b is Book => !!b),
+      pages: loot.pageIds.map((id) => getBookPageById(id)).filter((p): p is BookPage => !!p),
     };
   }
 
   /**
-   * Открывает сундук один раз и возвращает его содержимое.
-   * Повторное взаимодействие безопасно: сундук просто возвращает содержимое.
+   * Открывает сундук один раз: определяет содержимое, переносит найденное в
+   * коллекцию игрока и возвращает его. Повторное взаимодействие безопасно —
+   * сундук просто возвращает то, что в нём было.
    */
   public open(): ChestContents {
     if (!this.opened) {
+      const loot = resolveChestLoot(
+        {
+          bookIds: this.opts.bookIds,
+          pageIds: this.opts.pageIds ?? [],
+          dynamic: this.opts.dynamicSlots !== undefined ? { slots: this.opts.dynamicSlots } : undefined,
+        },
+        this.gameState
+      );
+      this.gameState.recordChestLoot(this.id, loot);
       this.opened = true;
-      this.gameState.openChest(this.id);
       this.applyOpenedVisual();
     }
     return this.getContents();
@@ -135,6 +156,7 @@ export class Chest {
       chestId: this.id,
       bookIds: [...this.opts.bookIds],
       pageIds: [...(this.opts.pageIds ?? [])],
+      dynamic: this.opts.dynamicSlots !== undefined,
     };
     return root;
   }

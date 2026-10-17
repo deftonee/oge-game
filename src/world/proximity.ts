@@ -157,7 +157,9 @@ export class ProximityDetector {
             combat.startEncounter(witch, this.deps.duelRoundsToWin());
           } else {
             const graphLabel = this.isMobileActive() ? "кнопка 📜" : "клавиша G";
-            lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: ${graphLabel})`;
+            // Не хватает книги/страницы — костёр не поможет, пока их не найти в сундуках.
+            const materialsHint = gameState.hasMaterials(witch.spell) ? "" : " Нужны книга и страница — ищи их в сундуках.";
+            lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: ${graphLabel}).${materialsHint}`;
           }
           break;
         }
@@ -186,7 +188,7 @@ export class ProximityDetector {
       return `${key} — барьер ветки «${name}»: нужно ${this.nearGate.requiredSpells} изученных тем`;
     }
     if (this.nearBonfire) return `${key} — сесть у костра`;
-    if (this.nearChest) return `${key} — открыть сундук`;
+    if (this.nearChest) return `${key} — ${this.nearChest.isOpened ? "заглянуть в открытый сундук" : "открыть сундук"}`;
     if (this.nearFriendlyWitch) return `${key} — спарринг с побеждённой ведьмой`;
     if (this.nearPracticeTarget) return `${key} — потренироваться`;
     return null;

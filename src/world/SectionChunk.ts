@@ -351,7 +351,7 @@ export class SectionChunk {
       const chest = new Chest(
         this.scene,
         new Vector3(pos.x, 0, pos.z),
-        { id: c.id, bookIds: c.bookIds, pageIds: c.pageIds },
+        { id: c.id, bookIds: c.bookIds, pageIds: c.pageIds, dynamicSlots: c.dynamic?.slots },
         gameState
       );
       this.chests.push(chest);
@@ -388,7 +388,7 @@ export class SectionChunk {
       const chest = new Chest(
         this.scene,
         new Vector3(cPos.x, 0, cPos.z),
-        { id: spur.chest.id, bookIds: spur.chest.bookIds, pageIds: spur.chest.pageIds },
+        { id: spur.chest.id, bookIds: spur.chest.bookIds, pageIds: spur.chest.pageIds, dynamicSlots: spur.chest.dynamic?.slots },
         gameState
       );
       this.chests.push(chest);

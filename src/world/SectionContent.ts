@@ -1,6 +1,6 @@
 import { ALL_SPELLS } from "../data/spells";
-import { ALL_BOOKS } from "../data/books";
 import { GameState, MAX_MASTERY } from "../core/GameState";
+import { CORRIDOR_CHEST_SLOTS, SPUR_CHEST_SLOTS, hasLootToFind } from "../learning/chestLoot";
 import type { BorderStyle, ChestSpec, ScatterSeed, SectionSpec } from "./spec/SectionSpec";
 import { pick, randInt, randRange, type RandomFn } from "./math/Rng";
 
@@ -22,8 +22,10 @@ import { pick, randInt, randRange, type RandomFn } from "./math/Rng";
  *    - ведьмы получают темы, где у игрока НИЗКОЕ мастерство (практика слабых
  *      мест); когда все доступные темы доведены до максимума — секция
  *      становится спокойнее (одна ведьма);
- *    - сундук появляется, только пока есть НЕ СОБРАННЫЕ страницы книг, и
- *      содержит именно их (после сбора всего лора сундуки исчезают);
+ *    - сундук с книгами/страницами появляется, только пока есть что находить
+ *      (hasLootToFind); что именно в нём лежит, решается при ОТКРЫТИИ из
+ *      состояния игрока (learning/chestLoot.ts) — после сбора всего лора
+ *      новые сундуки в мире не ставятся;
  *    - костёр — центр обучения: есть пока есть что учить.
  *
  * `apply()` сам смешивает частичное правило с умолчаниями
@@ -100,28 +102,25 @@ export class SectionContentBuilder {
       bonfires: { exact: 1 }, // центр обучения — пока есть что учить
       witches: calm ? { exact: 1 } : { count: ctx.tier === 1 ? { min: 1, max: 2 } : { min: 2, max: 3 } },
       practiceTargets: { min: 2, max: 4 },
-      // chests не задаём: apply() сам поставит сундук, пока есть не собранные страницы.
+      // chests не задаём: apply() сам поставит сундук, пока есть что находить.
     };
   }
 
   /**
    * Содержимое перпендикулярной боковой ниши (см. WorldGenerator.SideSpurSpec):
    * ОДНА тема для охраняющей ведьмы (та же логика взвешивания по слабости
-   * игрока, что и у обычных ведьм секции) + ОДНА группа не собранных страниц
-   * книги для сундука. Возвращает `null`, если нишу нечем наполнить —
-   * школы этого tier заперты (некому атаковать) или весь лор уже собран
-   * (нечем награждать); в этом случае ниша в мире не появляется.
+   * игрока, что и у обычных ведьм секции) + число слотов щедрого сундука-награды
+   * (содержимое определяется при открытии). Возвращает `null`, если нишу нечем
+   * наполнить — школы этого tier заперты (некому атаковать) или весь лор уже
+   * найден (нечем награждать); в этом случае ниша в мире не появляется.
    */
-  public buildSideSpurContent(tier: number): { spellId: string; book: { bookId: string; pageIds: string[] } } | null {
+  public buildSideSpurContent(tier: number): { spellId: string; chestSlots: number } | null {
     const pool = ALL_SPELLS.filter((s) => s.tier <= tier && this.gameState.isSchoolUnlocked(s.school));
     if (pool.length === 0) return null;
-
-    const groups = uncollectedPageGroups(this.gameState);
-    if (groups.length === 0) return null;
+    if (!hasLootToFind(this.gameState)) return null;
 
     const spellId = pickWeightedByWeakness(this.rng, pool, this.gameState).id;
-    const group = pick(this.rng, groups);
-    return { spellId, book: { bookId: group.bookId, pageIds: [...group.pageIds] } };
+    return { spellId, chestSlots: SPUR_CHEST_SLOTS };
   }
 
   /** Применяет правило к секции, заполняя её массивы сущностей и декора. */
@@ -185,22 +184,36 @@ export class SectionContentBuilder {
       spec.practiceTargets.push({ id: `practice-${spec.index}-${p}`, x: pos.x, z: pos.z, kind: pick(this.rng, PRACTICE_KINDS) });
     }
 
-    // --- Сундуки: точные спеки (с содержимым) — как указано; иначе содержимое
-    // берётся из состояния игры — не собранные страницы книг. ---
+    // --- Сундуки: точные спеки (с содержимым) — как указано; иначе ставим
+    // динамические сундуки (книги/страницы подбираются при открытии), пока игроку
+    // есть что находить. По умолчанию — один сундук на секцию. ---
     spec.chests = [];
     if (Array.isArray(merged.chests)) {
       for (const c of merged.chests) {
         placed.push({ x: c.x, z: c.z });
-        spec.chests.push({ id: c.id, x: c.x, z: c.z, bookIds: [...c.bookIds], pageIds: [...c.pageIds] });
+        spec.chests.push({
+          id: c.id,
+          x: c.x,
+          z: c.z,
+          bookIds: [...c.bookIds],
+          pageIds: [...c.pageIds],
+          ...(c.dynamic ? { dynamic: { slots: c.dynamic.slots } } : {}),
+        });
       }
     } else {
-      const groups = uncollectedPageGroups(this.gameState);
-      const count = merged.chests ? resolveCount(this.rng, merged.chests) : groups.length;
-      for (let i = 0; i < Math.min(count, groups.length); i++) {
-        const g = groups[i];
+      const wanted = merged.chests ? resolveCount(this.rng, merged.chests) : 1;
+      const count = hasLootToFind(this.gameState) ? wanted : 0;
+      for (let i = 0; i < count; i++) {
         const pos = pickSpacedPosition(this.rng, length, width, placed);
         placed.push(pos);
-        spec.chests.push({ id: this.nextChestId(), x: pos.x, z: pos.z, bookIds: [g.bookId], pageIds: g.pageIds });
+        spec.chests.push({
+          id: this.nextChestId(),
+          x: pos.x,
+          z: pos.z,
+          bookIds: [],
+          pageIds: [],
+          dynamic: { slots: CORRIDOR_CHEST_SLOTS },
+        });
       }
     }
 
@@ -226,16 +239,6 @@ function resolveCount(rng: RandomFn, b: Bounds | undefined, lengthExtra = 0): nu
 }
 
 const PRACTICE_KINDS: readonly ("tree" | "dummy" | "nettle")[] = ["tree", "dummy", "nettle"];
-
-/** Сундуки: группы по книгам, у которых есть НЕ СОБРАННЫЕ игроком страницы. */
-function uncollectedPageGroups(gameState: GameState): { bookId: string; pageIds: string[] }[] {
-  const groups: { bookId: string; pageIds: string[] }[] = [];
-  for (const book of ALL_BOOKS) {
-    const pageIds = book.pages.map((p) => p.id).filter((id) => !gameState.hasBookPage(id));
-    if (pageIds.length > 0) groups.push({ bookId: book.id, pageIds });
-  }
-  return groups;
-}
 
 /**
  * Ищет позицию для сущности в локальных координатах секции, отстоящую минимум

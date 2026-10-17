@@ -163,8 +163,9 @@ for (let seed = 1; seed <= 200; seed++) {
           spur.chest.z > 0 && spur.chest.z < spur.length && Math.abs(spur.chest.x) <= spur.width / 2,
           `seed ${seed}: сундук ниши вне границ рукава`
         );
+        // Содержимое — либо рукописное, либо динамическое (слоты; подбор при открытии).
         check(
-          spur.chest.bookIds.length + spur.chest.pageIds.length > 0,
+          spur.chest.bookIds.length + spur.chest.pageIds.length > 0 || (spur.chest.dynamic?.slots ?? 0) > 0,
           `seed ${seed}: сундук ниши без содержимого`
         );
       }

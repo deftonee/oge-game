@@ -1,4 +1,4 @@
-import { ALL_SPELLS, Spell, SpellQuestion, schoolOf } from "../data/spells";
+import { ALL_SPELLS, Spell, SpellQuestion, getSchoolById, schoolOf } from "../data/spells";
 import { GameState } from "../core/GameState";
 import { appendSolvedButton } from "../debug/debugSolve";
 
@@ -9,7 +9,11 @@ export interface LearningCallbacks {
 type Stage = "menu" | "simple" | "harder" | "done";
 
 /**
- * Обучение у костра (п.3 ТЗ), в два этапа:
+ * Обучение у костра (п.3 ТЗ). У костра можно изучить только то, на что у игрока
+ * есть материалы из сундуков — книга школы (ветка прокачки) и страница
+ * заклинания — и изучены пререквизиты. Остальные доступные по дереву темы
+ * показываются отдельным списком «не хватает материалов».
+ * Изучение — в два этапа:
  * 1. Показываем закон физики + формулу, игрок решает простейший пример.
  * 2. Задача посложнее (доп. шаг/конверсия единиц).
  * Ошибки в обучении не наказываются — это тренировка, а не бой: неверный
@@ -36,8 +40,14 @@ export class LearningManager {
     }
   }
 
-  private unlockableSpells(): Spell[] {
-    return ALL_SPELLS.filter((s) => this.gameState.isUnlockable(s));
+  /** Можно изучить прямо сейчас: дерево открыто и материалы найдены. */
+  private learnableSpells(): Spell[] {
+    return ALL_SPELLS.filter((s) => this.gameState.canLearn(s));
+  }
+
+  /** Дерево уже открыто, но не хватает книги и/или страницы — подсказка, что искать в сундуках. */
+  private waitingForMaterials(): Spell[] {
+    return ALL_SPELLS.filter((s) => this.gameState.isUnlockable(s) && !this.gameState.hasMaterials(s));
   }
 
   private renderMenu(): void {
@@ -62,12 +72,16 @@ export class LearningManager {
     header.appendChild(closeBtn);
     panel.appendChild(header);
 
-    const options = this.unlockableSpells();
+    const options = this.learnableSpells();
+    const waiting = this.waitingForMaterials();
 
     if (options.length === 0) {
       const empty = document.createElement("div");
       empty.className = "bonfire-empty";
-      empty.textContent = "Пока нечего изучать здесь — новые темы откроются, когда ты выучишь их пререквизиты.";
+      empty.textContent =
+        waiting.length > 0
+          ? "Пока нечего изучать: чтобы выучить заклинание, нужны книга его школы и страница с этим заклинанием. Ищи их в сундуках."
+          : "Пока нечего изучать здесь — новые темы откроются, когда ты выучишь их пререквизиты.";
       panel.appendChild(empty);
     } else {
       const intro = document.createElement("div");
@@ -91,6 +105,28 @@ export class LearningManager {
         list.appendChild(item);
       }
       panel.appendChild(list);
+    }
+
+    if (waiting.length > 0) {
+      const missingTitle = document.createElement("div");
+      missingTitle.className = "bonfire-intro bonfire-missing-title";
+      missingTitle.textContent = "Не хватает материалов:";
+      panel.appendChild(missingTitle);
+
+      const missingList = document.createElement("div");
+      missingList.className = "bonfire-missing";
+      for (const spell of waiting) {
+        const needs: string[] = [];
+        for (const book of this.gameState.missingBooks(spell)) {
+          needs.push(`📖 книга «${getSchoolById(book.schoolId).pathName}»`);
+        }
+        if (!this.gameState.hasSpellPage(spell)) needs.push("📄 страница");
+        const row = document.createElement("div");
+        row.className = "bonfire-missing-row";
+        row.innerHTML = `<span style="color:${spell.color}">${spell.name}</span> — ${needs.join(", ")}`;
+        missingList.appendChild(row);
+      }
+      panel.appendChild(missingList);
     }
 
     overlay.appendChild(panel);

@@ -172,6 +172,44 @@ body {
   margin-top: 4px;
 }
 
+/* Что не хватает для изучения у костра */
+.bonfire-missing-title {
+  margin-top: 16px;
+}
+
+.bonfire-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--chalk-dim);
+}
+
+/* Находки из сундука (книги и страницы) */
+.loot-item {
+  text-align: left;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid var(--panel-edge);
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: var(--chalk);
+  font-family: var(--font-display);
+}
+
+.loot-note {
+  font-size: 12px;
+  color: var(--chalk-dim);
+  margin-top: 6px;
+}
+
+.loot-ok {
+  color: var(--spell);
+}
+
+.loot-wait {
+  color: var(--gold);
+}
+
 .bonfire-stage-label {
   font-size: 12px;
   letter-spacing: 0.06em;
@@ -620,6 +658,13 @@ body {
   border-color: var(--gold);
 }
 
+/* Открыто по дереву, но нет книги/страницы — ищи в сундуках */
+.graph-node.needs-material {
+  border-style: dotted;
+  border-color: var(--gold);
+  opacity: 0.7;
+}
+
 .graph-node-name {
   font-weight: 700;
   font-size: 13px;
@@ -692,6 +737,24 @@ body {
 
 .graph-detail-status.locked {
   color: var(--danger);
+}
+
+.graph-detail-status.need {
+  color: var(--gold);
+}
+
+.graph-detail-mats {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.graph-detail-mats .have {
+  color: var(--spell);
+}
+
+.graph-detail-mats .miss {
+  color: var(--chalk-dim);
 }
 
 .graph-detail-mastery {

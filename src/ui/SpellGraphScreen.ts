@@ -1,4 +1,5 @@
 import { GameState, MAX_MASTERY } from "../core/GameState";
+import { booksRequiredFor, getBookBySchool } from "../data/books";
 import {
   ALL_SCHOOLS,
   ALL_SPELLS,
@@ -32,7 +33,10 @@ interface NodePos {
  * порядок изучения (тир) и связи-пререквизиты. Мосты (заклинания двух школ)
  * рисуются в основной школе как обычные узлы, во второй — как пунктирные
  * «гхосты». Школа тайн висит закрытой, пока не выучены мосты (см. докy).
- * Само изучение происходит у костра (этап 5), тут только обзор.
+ * Само изучение происходит у костра (этап 5), тут только обзор. Чтобы выучить
+ * тему, мало открыть её по дереву — нужны ещё найденные в сундуках книга школы
+ * и страница заклинания: узел без них рисуется как «нужны материалы», а в
+ * деталях видно, чего именно не хватает.
  */
 export class SpellGraphScreen {
   private overlay: HTMLElement | null = null;
@@ -160,6 +164,14 @@ export class SpellGraphScreen {
     }
     canvas.appendChild(svg);
 
+    // Прогресс сбора материалов школы: книга найдена? сколько страниц из скольки.
+    const materialsLine = (schoolId: string, total: number): string => {
+      const book = getBookBySchool(schoolId);
+      if (!book || total === 0) return "";
+      const pages = book.pages.filter((p) => this.gameState.hasBookPage(p.id)).length;
+      return ` · 📖 ${this.gameState.hasBook(book.id) ? "✓" : "✗"} · 📄 ${pages}/${book.pages.length}`;
+    };
+
     // Шапки школ (колонки)
     ALL_SCHOOLS.forEach((school, sIdx) => {
       const colX = PAD + sIdx * (COL_WIDTH + COL_GAP);
@@ -173,7 +185,7 @@ export class SpellGraphScreen {
       schoolHeader.innerHTML = `
         <div class="graph-school-title" style="color:${school.color}">${school.icon} ${school.name}</div>
         <div class="graph-school-path">${school.pathName}</div>
-        <div class="graph-school-progress">изучено ${learned}/${total}</div>
+        <div class="graph-school-progress">изучено ${learned}/${total}${materialsLine(school.id, total)}</div>
         ${
           !unlocked
             ? `<div class="graph-school-locked">🔒 откроется после ${school.unlockRule?.bridges ?? "?"} мостов</div>`
@@ -203,9 +215,22 @@ export class SpellGraphScreen {
       const learned = this.gameState.isLearned(spell.id);
       const mastery = this.gameState.getMastery(spell.id);
       const unlockable = this.gameState.isUnlockable(spell);
+      const hasMaterials = this.gameState.hasMaterials(spell);
       const missing = this.gameState.missingPrerequisites(spell);
       const schoolUnlocked = this.gameState.isSchoolUnlocked(spell.school);
       const school = schoolOf(spell);
+
+      // Материалы: нужные книги и страница — что найдено, чего нет.
+      const materialsHtml = (): string => {
+        const rows: string[] = [];
+        for (const book of booksRequiredFor(spell)) {
+          const has = this.gameState.hasBook(book.id);
+          rows.push(`<div class="${has ? "have" : "miss"}">📖 ${book.title}: ${has ? "найдена" : "не найдена"}</div>`);
+        }
+        const hasPage = this.gameState.hasSpellPage(spell);
+        rows.push(`<div class="${hasPage ? "have" : "miss"}">📄 Страница: ${hasPage ? "найдена" : "не найдена"}</div>`);
+        return `<div class="graph-detail-mats">${rows.join("")}</div>`;
+      };
 
       const roleNames = QUESTION_ROLES.filter((r) => hasQuestionRole(spell, r)).map((r) => ROLE_LABELS[r]);
 
@@ -215,12 +240,14 @@ export class SpellGraphScreen {
         statusHtml = `<div class="graph-detail-status ok">Изучено</div><div class="graph-detail-mastery" style="color:${spell.color}">${stars}</div>`;
       } else if (!schoolUnlocked) {
         statusHtml = `<div class="graph-detail-status locked">Школа закрыта</div><div class="graph-detail-missing">Нужно изучить ${school.unlockRule?.bridges ?? 0} моста(ов) — комбо-заклинания двух школ</div>`;
+      } else if (unlockable && hasMaterials) {
+        statusHtml = `<div class="graph-detail-status open">Доступно — найди костёр</div>${materialsHtml()}`;
       } else if (unlockable) {
-        statusHtml = `<div class="graph-detail-status open">Доступно — найди костёр</div>`;
+        statusHtml = `<div class="graph-detail-status need">Нужны материалы — ищи в сундуках</div>${materialsHtml()}`;
       } else {
         statusHtml = `<div class="graph-detail-status locked">Заблокировано</div><div class="graph-detail-missing">Нужно изучить: ${missing
           .map((m) => m.name)
-          .join(", ")}</div>`;
+          .join(", ")}</div>${materialsHtml()}`;
       }
 
       detail.innerHTML = `
@@ -237,13 +264,22 @@ export class SpellGraphScreen {
     for (const pos of positions) {
       const learned = this.gameState.isLearned(pos.spell.id);
       const unlockable = this.gameState.isUnlockable(pos.spell);
+      const hasMaterials = this.gameState.hasMaterials(pos.spell);
       const mastery = this.gameState.getMastery(pos.spell.id);
       const schoolUnlocked = this.gameState.isSchoolUnlocked(pos.spell.school);
       const bridge = isBridgeSpell(pos.spell);
 
+      // learned — изучено; unlockable — можно учить у костра сейчас;
+      // needs-material — по дереву открыто, но нет книги/страницы; locked — остальное.
       const cls = [
         "graph-node",
-        learned ? "learned" : schoolUnlocked && unlockable ? "unlockable" : "locked",
+        learned
+          ? "learned"
+          : schoolUnlocked && unlockable
+            ? hasMaterials
+              ? "unlockable"
+              : "needs-material"
+            : "locked",
         pos.ghost ? "ghost" : "",
         bridge ? "bridge" : "",
       ]
@@ -264,6 +300,7 @@ export class SpellGraphScreen {
         ${bridge ? `<div class="graph-node-bridge">🌉 мост</div>` : ""}
         ${learned ? `<div class="graph-node-mastery">Ур. ${mastery}/${MAX_MASTERY}</div>` : ""}
         ${!learned && !unlockable ? `<div class="graph-node-lock">🔒</div>` : ""}
+        ${!learned && unlockable && !hasMaterials ? `<div class="graph-node-lock">📄</div>` : ""}
       `;
       node.addEventListener("click", () => showDetail(pos.spell));
       canvas.appendChild(node);

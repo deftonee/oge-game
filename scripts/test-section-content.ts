@@ -1,7 +1,7 @@
 import { GameState } from "../src/core/GameState";
 import { SectionContentBuilder } from "../src/world/SectionContent";
 import { generateWorld, SectionSpec } from "../src/world/WorldGenerator";
-import { ALL_BOOKS } from "../src/data/books";
+import { ALL_BOOKS, bookIdOfSchool, pageIdOfSpell } from "../src/data/books";
 
 let failures = 0;
 let checks = 0;
@@ -70,7 +70,7 @@ function makeBuilder(gameState: GameState, seed = 1): SectionContentBuilder {
   const builder = makeBuilder(gs);
   const spec = makeSpec(5);
 
-  const exactChest = { id: "chest-scripted", x: 3, z: 8, bookIds: ["mechanics_basics"], pageIds: ["mechanics_speed"] };
+  const exactChest = { id: "chest-scripted", x: 3, z: 8, bookIds: [bookIdOfSchool("earth")], pageIds: [pageIdOfSpell("velocity")] };
   builder.apply(spec, {
     bonfires: { exact: 2 },
     witches: { spellIds: ["spell_a", "spell_b", "spell_c"] },
@@ -88,7 +88,7 @@ function makeBuilder(gameState: GameState, seed = 1): SectionContentBuilder {
   check(spec.chests.length === 1, `точное правило: сундуков ${spec.chests.length}, ожидалось 1`);
   check(spec.chests[0]?.id === "chest-scripted", "точное правило: сундук с указанным id");
   check(
-    spec.chests[0]?.bookIds[0] === "mechanics_basics" && spec.chests[0]?.pageIds[0] === "mechanics_speed",
+    spec.chests[0]?.bookIds[0] === bookIdOfSchool("earth") && spec.chests[0]?.pageIds[0] === pageIdOfSpell("velocity"),
     "точное правило: содержимое сундука как указано"
   );
 }
@@ -106,34 +106,32 @@ function makeBuilder(gameState: GameState, seed = 1): SectionContentBuilder {
   check(spec.bonfires.length === 2, "частичное правило: 2 костра");
   check(spec.witches.length >= 1, `частичное правило: ведьм не должно быть 0 (умолчания из состояния) — ${spec.witches.length}`);
   check(spec.practiceTargets.length >= 2, `частичное правило: цели из умолчаний — ${spec.practiceTargets.length}`);
-  check(spec.chests.length >= 1, `частичное правило: сундук из не собранных страниц — ${spec.chests.length}`);
+  check(spec.chests.length >= 1, `частичное правило: сундук, пока есть что находить — ${spec.chests.length}`);
   for (const e of spec.witches) check(e.z > 0 && e.z < spec.length && Math.abs(e.x) <= spec.width / 2 - 1, "частичное правило: ведьма в границах");
 }
 
 // ---------------------------------------------------------------------------
-// 3. Процедурное правило из состояния игры: сундук содержит не собранное.
+// 3. Процедурное правило из состояния игры: динамический сундук, пока есть что находить.
 // ---------------------------------------------------------------------------
 {
   const gs = new GameState();
-  const uncollected = ALL_BOOKS.flatMap((b) => b.pages.map((p) => p.id)).filter((id) => !gs.hasBookPage(id));
-  check(uncollected.length > 0, "в свежем состоянии есть что собирать");
-
   const builder = makeBuilder(gs);
   const spec = makeSpec(7);
   builder.apply(spec, SectionContentBuilder.defaultRule(gs, { tier: 2, isFirst: false }));
 
-  check(spec.chests.length >= 1, `свежее состояние: сундук поставлен — ${spec.chests.length}`);
-  const chestPageIds = spec.chests.flatMap((c) => c.pageIds);
-  check(
-    uncollected.every((id) => chestPageIds.includes(id)),
-    `свежее состояние: сундук содержит ВСЕ не собранные страницы (${chestPageIds.join(",")})`
-  );
+  check(spec.chests.length === 1, `свежее состояние: ровно один сундук на секцию — ${spec.chests.length}`);
+  const chest = spec.chests[0];
+  check(!!chest?.dynamic && chest.dynamic.slots > 0, "свежее состояние: сундук динамический (содержимое подбирается при открытии)");
+  check(chest?.bookIds.length === 0 && chest?.pageIds.length === 0, "динамический сундук не зашивает содержимое в мир");
 
-  // Собрали всё — сундуков больше быть не должно.
-  for (const id of uncollected) gs.collectBookPage(id);
+  // Нашли всё (книги и страницы) — новые сундуки в мир больше не ставятся.
+  for (const book of ALL_BOOKS) {
+    gs.collectBook(book.id);
+    for (const page of book.pages) gs.collectBookPage(page.id);
+  }
   const spec2 = makeSpec(7);
   builder.apply(spec2, SectionContentBuilder.defaultRule(gs, { tier: 2, isFirst: false }));
-  check(spec2.chests.length === 0, `после сбора всего лора сундуков нет — ${spec2.chests.length}`);
+  check(spec2.chests.length === 0, `после находки всего лора сундуков нет — ${spec2.chests.length}`);
 }
 
 // ---------------------------------------------------------------------------

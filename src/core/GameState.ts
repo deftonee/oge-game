@@ -8,6 +8,7 @@ import {
   getSpellsBySchool,
   isBridgeSpell,
 } from "../data/spells";
+import { Book, ChestLoot, booksRequiredFor, getPageBySpell } from "../data/books";
 
 export interface SpellProgress {
   learned: boolean;
@@ -20,6 +21,9 @@ export const MAX_MASTERY = 5;
  * Центральное состояние прокачки игрока. Ветки (школы) независимы: у каждой
  * свой граф внутри и свой прогресс; школа открывается правилом из data
  * (по умолчанию всегда; Школа тайн — после N изученных мостов).
+ *
+ * Изучение заклинания требует материалов, найденных в сундуках: книгу школы
+ * (ветки прокачки) и страницу самого заклинания — см. canLearn().
  */
 export class GameState {
   private progress = new Map<string, SpellProgress>();
@@ -27,6 +31,9 @@ export class GameState {
   private openedGateIds = new Set<string>();
   private openedChestIds = new Set<string>();
   private collectedBookPageIds = new Set<string>();
+  private collectedBookIds = new Set<string>();
+  /** Что именно лежало в открытом сундуке (содержимое динамических сундуков определяется при открытии). */
+  private chestLoot = new Map<string, ChestLoot>();
 
   constructor() {
     for (const spell of ALL_SPELLS) {
@@ -90,6 +97,37 @@ export class GameState {
     return [...this.openedChestIds];
   }
 
+  // ---------- Книги и содержимое сундуков ----------
+
+  public collectBook(bookId: string): void {
+    this.collectedBookIds.add(bookId);
+  }
+
+  public hasBook(bookId: string): boolean {
+    return this.collectedBookIds.has(bookId);
+  }
+
+  public getCollectedBookIds(): string[] {
+    return [...this.collectedBookIds];
+  }
+
+  /**
+   * Фиксирует открытие сундука: запоминает содержимое (чтобы повторный осмотр и
+   * пересборка секции показали то же самое) и переносит книги/страницы в
+   * коллекцию игрока. Повторный вызов для того же сундука безопасен.
+   */
+  public recordChestLoot(chestId: string, loot: ChestLoot): void {
+    this.openedChestIds.add(chestId);
+    this.chestLoot.set(chestId, { bookIds: [...loot.bookIds], pageIds: [...loot.pageIds] });
+    for (const id of loot.bookIds) this.collectBook(id);
+    for (const id of loot.pageIds) this.collectBookPage(id);
+  }
+
+  public getChestLoot(chestId: string): ChestLoot | undefined {
+    const loot = this.chestLoot.get(chestId);
+    return loot ? { bookIds: [...loot.bookIds], pageIds: [...loot.pageIds] } : undefined;
+  }
+
   public learn(spellId: string): void {
     const entry = this.progress.get(spellId);
     if (entry) entry.learned = true;
@@ -141,5 +179,31 @@ export class GameState {
       .filter((id) => !this.isLearned(id))
       .map((id) => ALL_SPELLS.find((s) => s.id === id)!)
       .filter(Boolean);
+  }
+
+  // ---------- Материалы для изучения (книги и страницы) ----------
+
+  /** Книги школ заклинания, которых у игрока ещё нет. */
+  public missingBooks(spell: Spell): Book[] {
+    return booksRequiredFor(spell).filter((b) => !this.hasBook(b.id));
+  }
+
+  /** Найдена ли страница заклинания. */
+  public hasSpellPage(spell: Spell): boolean {
+    const page = getPageBySpell(spell.id);
+    return !!page && this.hasBookPage(page.id);
+  }
+
+  /** Есть и все нужные книги, и страница заклинания. */
+  public hasMaterials(spell: Spell): boolean {
+    return this.missingBooks(spell).length === 0 && this.hasSpellPage(spell);
+  }
+
+  /**
+   * Можно ли изучить заклинание у костра ПРЯМО СЕЙЧАС: тема доступна по дереву
+   * (школа открыта, пререквизиты изучены — isUnlockable) и найдены материалы.
+   */
+  public canLearn(spell: Spell): boolean {
+    return this.isUnlockable(spell) && this.hasMaterials(spell);
   }
 }

@@ -6,6 +6,7 @@
  * «как выглядит и как тяжёл мир», живёт здесь — генератор только применяет.
  */
 
+import { bookIdOfSchool, pageIdOfSpell } from "../../data/books";
 import type { BorderStyle } from "../spec/SectionSpec";
 import type { SectionContentRule } from "../SectionContent";
 
@@ -120,13 +121,35 @@ export const BORDER_STYLES: readonly BorderStyle[] = ["bushes", "fence", "mounta
  * (forkAllowed исключает первую секцию), поэтому #0/#1 — всегда ствол.
  */
 export const INTRO_RULES: readonly SectionContentRule[] = [
-  // #0 — входной шлюз: костёр обучения у входа, сундуков нет.
-  { bonfires: { exact: 1 }, chests: [] },
+  // #0 — входной шлюз: костёр у входа и вводный сундук с книгой Школы земли и
+  // двумя страницами простейших тем. Без него игрок не смог бы ничего изучить
+  // (изучение требует книгу и страницу) и упёрся бы в первые ворота.
+  // Длина шлюза от 12 м, ворота на её конце — сундук (z=9) вне радиуса ворот.
+  {
+    bonfires: { exact: 1 },
+    chests: [
+      {
+        id: "chest-intro-0",
+        x: 0,
+        z: 9,
+        bookIds: [bookIdOfSchool("earth")],
+        pageIds: [pageIdOfSpell("velocity"), pageIdOfSpell("density")],
+      },
+    ],
+  },
   // #1 — первый «настоящий» коридор: костёр у входа и второй в глубине,
-  // один сундук с конкретной страницей книги.
+  // сундук с книгой Школы пламени и двумя страницами (вторая ветка прокачки).
   {
     bonfires: { exact: 2 },
-    chests: [{ id: "chest-intro-1", x: 0, z: 24, bookIds: ["mechanics_basics"], pageIds: ["mechanics_acceleration"] }],
+    chests: [
+      {
+        id: "chest-intro-1",
+        x: 0,
+        z: 24,
+        bookIds: [bookIdOfSchool("fire")],
+        pageIds: [pageIdOfSpell("spark"), pageIdOfSpell("acceleration")],
+      },
+    ],
   },
 ];
 

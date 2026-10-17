@@ -6,6 +6,7 @@ import { LearningManager } from "../learning/LearningManager";
 import { PracticeManager } from "../practice/PracticeManager";
 import { GateManager } from "../gates/GateManager";
 import { SpellGraphScreen } from "../ui/SpellGraphScreen";
+import { ChestLootScreen } from "../ui/ChestLootScreen";
 
 export interface GameManagers {
   hud: Hud;
@@ -14,10 +15,11 @@ export interface GameManagers {
   learning: LearningManager;
   practice: PracticeManager;
   gates: GateManager;
+  chestLoot: ChestLootScreen;
 }
 
 /**
- * Фабрика UI-менеджеров игры (HUD, бой, граф, обучение, тренировка, барьеры).
+ * Фабрика UI-менеджеров игры (HUD, бой, граф, обучение, тренировка, барьеры, находки из сундуков).
  * Боевые колбэки связывают CombatManager с состоянием прогресса (GameState),
  * ведьмеными кулдаунами (EncounterCooldown) и HUD-уроном.
  */
@@ -56,5 +58,7 @@ export function createManagers(
     },
   });
 
-  return { hud, spellGraph, combat, learning, practice, gates };
+  const chestLoot = new ChestLootScreen(uiRoot, gameState);
+
+  return { hud, spellGraph, combat, learning, practice, gates, chestLoot };
 }
