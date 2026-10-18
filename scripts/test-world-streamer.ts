@@ -4,6 +4,7 @@ import type { SectionSpec, WorldSpec } from "../src/world/WorldGenerator";
 import { WorldStreamer } from "../src/world/WorldStreamer";
 import { FogManager } from "../src/world/FogManager";
 import { GameState } from "../src/core/GameState";
+import { scaled } from "./lib/testScale";
 
 let failures = 0;
 let checks = 0;
@@ -18,6 +19,22 @@ function check(cond: boolean, msg: string): void {
 const engine = new NullEngine();
 const scene = new Scene(engine);
 const gameState = new GameState();
+
+// По умолчанию лёгкий прогон (мало миров на проверку); полный — `-- --full`, см. scripts/lib/testScale.ts.
+const WALK_SEEDS = scaled(4, 20, "WALK_SEEDS");
+const HOVER_SEEDS = scaled(2, 6, "HOVER_SEEDS");
+const DEAD_SEEDS = scaled(2, 5, "DEAD_SEEDS");
+
+/**
+ * Все стримеры теста делят одну сцену, а чанки брошенного стримера сами не исчезают:
+ * без чистки между мирами меши копятся (на полном прогоне — гигабайты и OOM). После
+ * каждого мира выкидываем всё, что осталось в сцене; стример следующего мира строится заново.
+ */
+function resetScene(): void {
+  for (const m of [...scene.meshes]) m.dispose(false, true);
+  for (const n of [...scene.transformNodes]) n.dispose(false, true);
+  for (const mat of [...scene.materials]) mat.dispose(false, true);
+}
 
 // Бёрём мир, в котором есть развилка (обычно хватает пары сидов).
 let world = generateWorld(gameState, 42);
@@ -240,18 +257,19 @@ function walkForward(seed: number): { missing: number; drops: number; maxBuilds:
 // разъезжается с spec.index, а оси схождений коллинеарны осям родителей —
 // оба бага ловятся только там.
 const walkSeeds: number[] = [];
-for (let seed = 1; seed <= 400 && walkSeeds.length < 20; seed++) {
+for (let seed = 1; seed <= 400 && walkSeeds.length < WALK_SEEDS; seed++) {
   const w = generateWorld(new GameState(), seed);
   const forks = w.sections.filter((s) => s.gates.length === 2).length;
   if (forks >= 2) walkSeeds.push(seed);
 }
-check(walkSeeds.length >= 5, `найдено слишком мало миров с двумя развилками: ${walkSeeds.length}`);
+check(walkSeeds.length >= Math.min(WALK_SEEDS, 5), `найдено слишком мало миров с двумя развилками: ${walkSeeds.length}`);
 
 for (const seed of walkSeeds) {
   const { missing, drops, maxBuilds } = walkForward(seed);
   check(missing === 0, `seed ${seed}: секция под игроком выгружалась ${missing} раз`);
   check(drops === 0, `seed ${seed}: frontier откатывался ${drops} раз`);
   check(maxBuilds <= 1, `seed ${seed}: чанк пересобирался ${maxBuilds} раза — churn при монотонной прогулке`);
+  resetScene();
 }
 console.log(`прогулок вперёд: ${walkSeeds.length} миров с >=2 развилками (сиды ${walkSeeds.join(", ")})`);
 
@@ -517,23 +535,27 @@ function deadEndBacktrackRegression(seed: number): void {
   }
 }
 
-const hoverSeeds = walkSeeds.slice(0, 6);
+const hoverSeeds = walkSeeds.slice(0, HOVER_SEEDS);
 for (const seed of hoverSeeds) {
   forkGateHoverRegression(seed);
   forkGateHoverOpenRegression(seed);
   forkExitRegression(seed);
   hysteresisBandRegression(seed);
+  resetScene();
 }
 console.log(`покачиваний у ворот: ${hoverSeeds.length} миров (сиды ${hoverSeeds.join(", ")})`);
 
 const deadEndSeeds: number[] = [];
-for (let seed = 1; seed <= 400 && deadEndSeeds.length < 5; seed++) {
+for (let seed = 1; seed <= 400 && deadEndSeeds.length < DEAD_SEEDS; seed++) {
   const w = generateWorld(new GameState(), seed);
   const hasDeadEnd = w.sections.some((s) => s.isDeadEnd);
   if (hasDeadEnd) deadEndSeeds.push(seed);
 }
-check(deadEndSeeds.length >= 3, `найдено слишком мало миров с тупиком: ${deadEndSeeds.length}`);
-for (const seed of deadEndSeeds) deadEndBacktrackRegression(seed);
+check(deadEndSeeds.length >= Math.min(DEAD_SEEDS, 3), `найдено слишком мало миров с тупиком: ${deadEndSeeds.length}`);
+for (const seed of deadEndSeeds) {
+  deadEndBacktrackRegression(seed);
+  resetScene();
+}
 console.log(`тупиков проверено: ${deadEndSeeds.length} миров (сиды ${deadEndSeeds.join(", ")})`);
 
 console.log(`Проверок: ${checks}, провалов: ${failures}`);

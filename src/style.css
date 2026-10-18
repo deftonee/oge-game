@@ -279,6 +279,22 @@ body {
   white-space: nowrap;
 }
 
+.hud-stealth {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: #9be8a6;
+  background: rgba(16, 19, 31, 0.85);
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid #4fd66a;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .hud-locked-hint {
   position: fixed;
   bottom: 56px;

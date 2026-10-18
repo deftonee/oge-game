@@ -36,10 +36,27 @@ export class Hud {
     interactHint.style.display = "none";
     uiRoot.appendChild(interactHint);
     this.interactHintEl = interactHint;
+
+    const stealthBadge = document.createElement("div");
+    stealthBadge.className = "hud-stealth";
+    stealthBadge.style.display = "none";
+    uiRoot.appendChild(stealthBadge);
+    this.stealthBadgeEl = stealthBadge;
   }
 
   private lockedHintEl!: HTMLElement;
   private interactHintEl!: HTMLElement;
+  private stealthBadgeEl!: HTMLElement;
+
+  /** Плашка стелса («🌿 В укрытии»); null — скрыть. */
+  public setStealthBadge(text: string | null): void {
+    if (text) {
+      if (this.stealthBadgeEl.textContent !== text) this.stealthBadgeEl.textContent = text;
+      this.stealthBadgeEl.style.display = "block";
+    } else {
+      this.stealthBadgeEl.style.display = "none";
+    }
+  }
 
   /** Показать/скрыть подсказку "заклинание ещё не изучено" рядом с ведьмой. */
   public setLockedHint(text: string | null): void {

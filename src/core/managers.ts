@@ -39,8 +39,15 @@ export function createManagers(
       witch.setFriendly(true);
       cooldown.notifyDuelEnded();
     },
-    onDuelLost: (witch) => cooldown.notifyDuelEnded(witch.id),
-    onRetreat: (witch) => cooldown.notifyDuelEnded(witch.id),
+    // Проиграл/отступил: ведьма отцепляется и идёт домой (несколько секунд не замечает игрока).
+    onDuelLost: (witch) => {
+      cooldown.notifyDuelEnded(witch.id);
+      witch.disengage();
+    },
+    onRetreat: (witch) => {
+      cooldown.notifyDuelEnded(witch.id);
+      witch.disengage();
+    },
     onPlayerDamaged: (amount) => hud.damage(amount),
   });
 

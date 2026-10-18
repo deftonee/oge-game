@@ -28,6 +28,8 @@ export interface ProximityDeps {
   hud: Hud;
   cooldown: EncounterCooldown;
   duelRoundsToWin: () => number;
+  /** Игрок спрятан в кусте — враждебные ведьмы его не замечают и бой не начинают. По умолчанию — нет. */
+  isPlayerHidden?: () => boolean;
 }
 
 /** Квадрат расстояния от точки до линии барьера (горизонтальный сегмент width). */
@@ -130,39 +132,41 @@ export class ProximityDetector {
 
     // Ведьмы: дружелюбные (уже побеждённые) — по E на спарринг; враждебные —
     // автоматически при подходе (если тема изучена) или подсказка (если нет).
+    //
+    // Враждебная ведьма теперь САМА подходит к игроку (см. ai/witchBrain), поэтому её
+    // встреча не должна «глохнуть» рядом с сундуком/костром/воротами — иначе игрок,
+    // стоящий у сундука, был бы неуязвим. Спрятанного в кусте игрока она не трогает.
     this.nearFriendlyWitch = null;
     let lockedHint: string | null = null;
-    if (!this.nearGate && !this.nearBonfire && !this.nearChest) {
-      const cooldownActive = cooldown.isGlobalCooldownActive();
-      for (const witch of witches) {
-        const dist = Vector3.Distance(witch.position, player.position);
+    const nothingElseNear = !this.nearGate && !this.nearBonfire && !this.nearChest;
+    const hidden = this.deps.isPlayerHidden?.() ?? false;
+    const cooldownActive = cooldown.isGlobalCooldownActive();
+    for (const witch of witches) {
+      const dist = Vector3.Distance(witch.position, player.position);
 
-        if (witch.friendly) {
-          if (dist <= ENCOUNTER_RADIUS) {
-            this.nearFriendlyWitch = witch;
-            break;
-          }
-          continue;
+      if (witch.friendly) {
+        if (nothingElseNear && !this.nearFriendlyWitch && dist <= ENCOUNTER_RADIUS) this.nearFriendlyWitch = witch;
+        continue;
+      }
+
+      if (hidden || cooldownActive) continue;
+
+      if (witch.id === cooldown.getCooldownWitchId()) {
+        if (dist > ENCOUNTER_RADIUS + 0.5) cooldown.clearWitchCooldown();
+        continue;
+      }
+
+      if (dist <= ENCOUNTER_RADIUS) {
+        if (gameState.isLearned(witch.spell.id)) {
+          combat.startEncounter(witch, this.deps.duelRoundsToWin());
+        } else if (nothingElseNear) {
+          // Подсказка делит место на экране с «Нажми E» — при сундуке/костре/воротах рядом её не показываем.
+          const graphLabel = this.isMobileActive() ? "кнопка 📜" : "клавиша G";
+          // Не хватает книги/страницы — костёр не поможет, пока их не найти в сундуках.
+          const materialsHint = gameState.hasMaterials(witch.spell) ? "" : " Нужны книга и страница — ищи их в сундуках.";
+          lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: ${graphLabel}).${materialsHint}`;
         }
-
-        if (cooldownActive) continue;
-
-        if (witch.id === cooldown.getCooldownWitchId()) {
-          if (dist > ENCOUNTER_RADIUS + 0.5) cooldown.clearWitchCooldown();
-          continue;
-        }
-
-        if (dist <= ENCOUNTER_RADIUS) {
-          if (gameState.isLearned(witch.spell.id)) {
-            combat.startEncounter(witch, this.deps.duelRoundsToWin());
-          } else {
-            const graphLabel = this.isMobileActive() ? "кнопка 📜" : "клавиша G";
-            // Не хватает книги/страницы — костёр не поможет, пока их не найти в сундуках.
-            const materialsHint = gameState.hasMaterials(witch.spell) ? "" : " Нужны книга и страница — ищи их в сундуках.";
-            lockedHint = `🔒 Не умеешь защищаться от «${witch.spell.name}» — сначала изучи это заклинание (граф: ${graphLabel}).${materialsHint}`;
-          }
-          break;
-        }
+        break;
       }
     }
     hud.setLockedHint(lockedHint);

@@ -164,4 +164,9 @@ export class PlayerController {
   public get position(): Vector3 {
     return this.collider.position;
   }
+
+  /** Прозрачность модели игрока (1 — обычный, <1 — «спрятан в кусте»). Коллайдер не затрагивается. */
+  public setVisualAlpha(alpha: number): void {
+    for (const mesh of this.visual.getChildMeshes()) mesh.visibility = alpha;
+  }
 }

@@ -43,6 +43,7 @@ export class SectionFactory {
       sideSpurs: [],
       grass: [],
       bushes: [],
+      trees: [],
       borderLeft: [],
       borderRight: [],
     };

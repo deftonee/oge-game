@@ -1,6 +1,9 @@
 import { generateWorld, extendWorld } from "../src/world/WorldGenerator";
 import { GameState } from "../src/core/GameState";
 import { distPointToSectionAxis } from "../src/world/geometry/SectionGeometry";
+import { scaled } from "./lib/testScale";
+
+const SEEDS = scaled(15, 40);
 
 let failures = 0;
 function check(cond: boolean, msg: string): void {
@@ -10,7 +13,7 @@ function check(cond: boolean, msg: string): void {
   }
 }
 
-for (let seed = 1; seed <= 40; seed++) {
+for (let seed = 1; seed <= SEEDS; seed++) {
   const gs = new GameState();
   const base = generateWorld(gs, seed);
   const extended = extendWorld(base, gs, 3);

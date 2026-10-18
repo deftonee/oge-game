@@ -20,10 +20,15 @@ import { FootprintIndex } from "../src/world/geometry/Footprint";
 import { localToWorld } from "../src/world/geometry/SectionGeometry";
 import { SectionChunk } from "../src/world/SectionChunk";
 import { GameState } from "../src/core/GameState";
+import { FULL, scaled } from "./lib/testScale";
 
 declare const process: { exit(code?: number): never; env: Record<string, string | undefined> };
 
-const SEEDS = Number(process.env.SEEDS ?? 10);
+const SEEDS = scaled(2, 10);
+// Лёгкий прогон: реже берём куски стены и меньше разворотов на кусок (каждый заход — ~50 тяжёлых
+// коллизий). Полный (`-- --full`): каждый 4-й кусок и три разворота.
+const WALL_STRIDE = FULL ? 4 : 8;
+const WALL_TURNS = FULL ? [0, 0.5, -0.5] : [0, 0.5];
 // ellipsoidOffset=0.9 при высоте эллипсоида 1.8 → на полу position.y ≈ 0. Провал
 // сквозь край за 50 кадров по -0.05 уводит y к -2.5, поэтому порог между ними.
 const GROUND_MIN_Y = -0.3;
@@ -92,7 +97,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   let k = 0;
   for (const s of world.sections) {
     for (const w of index.wallsOf(s)) {
-      if (k++ % 4 !== 0) continue; // каждый 4-й кусок — хватает охвата, тест остаётся быстрым
+      if (k++ % WALL_STRIDE !== 0) continue; // выборка кусков — хватает охвата, тест остаётся быстрым
       const mid = { x: (w.a.x + w.b.x) / 2, z: (w.a.z + w.b.z) / 2 };
       const start = { x: mid.x - w.n.x * 1.2, z: mid.z - w.n.z * 1.2 };
       // Старт должен быть на полу с запасом под эллипсоид.
@@ -104,7 +109,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
         wallsSkipped++;
         continue;
       }
-      for (const turn of [0, 0.5, -0.5]) {
+      for (const turn of WALL_TURNS) {
         place(start.x, start.z);
         const c = Math.cos(turn);
         const sn = Math.sin(turn);

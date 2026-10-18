@@ -15,6 +15,10 @@ import {
   SIDE_SPUR_MARGIN,
 } from "../src/world/WorldGenerator";
 import { GameState } from "../src/core/GameState";
+import { scaled } from "./lib/testScale";
+
+// По умолчанию лёгкий прогон (60 сидов); полный — `-- --full` (200) или SEEDS=N, см. scripts/lib/testScale.ts.
+const SEEDS = scaled(60, 200);
 
 /** Части отрезка [outerStart, outerEnd], не накрытые отрезком [innerStart, innerEnd]. */
 function uncovered(outerStart: number, outerEnd: number, innerStart: number, innerEnd: number, eps = 1e-6): number[][] {
@@ -41,7 +45,7 @@ let totalForks = 0;
 let totalDeadEnds = 0;
 let totalSideSpurs = 0;
 
-for (let seed = 1; seed <= 200; seed++) {
+for (let seed = 1; seed <= SEEDS; seed++) {
   const gameState = new GameState();
   const world = generateWorld(gameState, seed);
   const sections = world.sections;
@@ -425,15 +429,15 @@ for (let seed = 1; seed <= 200; seed++) {
   check(new Set(gateIds).size === gateIds.length, `seed ${seed}: дубли id ворот`);
 }
 
-check(totalForks >= 40, `развилки должны иногда встречаться (на 200 сидах видели ${totalForks})`);
-check(totalDeadEnds >= 10, `тупики должны иногда встречаться (на 200 сидах видели ${totalDeadEnds} из ${totalForks} развилок-вариантов)`);
-check(totalSideSpurs >= 30, `боковые ниши должны иногда встречаться (на 200 сидах видели ${totalSideSpurs})`);
+check(totalForks >= SEEDS * 0.2, `развилки должны иногда встречаться (на ${SEEDS} сидах видели ${totalForks})`);
+check(totalDeadEnds >= SEEDS * 0.05, `тупики должны иногда встречаться (на ${SEEDS} сидах видели ${totalDeadEnds} из ${totalForks} развилок-вариантов)`);
+check(totalSideSpurs >= SEEDS * 0.15, `боковые ниши должны иногда встречаться (на ${SEEDS} сидах видели ${totalSideSpurs})`);
 
 console.log(
-  `Проверок: ${checks}, провалов: ${failures}, развилок на 200 сидах: ${totalForks} (из них тупиков: ${totalDeadEnds}), боковых ниш: ${totalSideSpurs}`
+  `Проверок: ${checks}, провалов: ${failures}, развилок на ${SEEDS} сидах: ${totalForks} (из них тупиков: ${totalDeadEnds}), боковых ниш: ${totalSideSpurs}`
 );
 if (failures > 0) {
   console.error("FAILED: инварианты генерации мира нарушены");
   process.exit(1);
 }
-console.log("OK: все инварианты генерации мира прошли на 200 сидах");
+console.log(`OK: все инварианты генерации мира прошли на ${SEEDS} сидах`);

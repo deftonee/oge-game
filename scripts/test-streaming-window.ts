@@ -23,10 +23,11 @@ import { WorldStreamer } from "../src/world/WorldStreamer";
 import { FootprintIndex, pointInPolygon } from "../src/world/geometry/Footprint";
 import { localToWorld } from "../src/world/geometry/SectionGeometry";
 import { GameState } from "../src/core/GameState";
+import { scaled } from "./lib/testScale";
 
 declare const process: { exit(code?: number): never; env: Record<string, string | undefined> };
 
-const SEEDS = Number(process.env.SEEDS ?? 5);
+const SEEDS = scaled(3, 5);
 /** Радиус (м), в котором пол вокруг игрока обязан быть построен. */
 const REACH_M = Number(process.env.REACH_M ?? 8);
 const STEP_M = 2;

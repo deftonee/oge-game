@@ -45,6 +45,7 @@ function makeSpec(index: number, tier = 2, length = 40, width = 24): SectionSpec
     sideSpurs: [],
     grass: [],
     bushes: [],
+    trees: [],
     borderLeft: [],
     borderRight: [],
   };

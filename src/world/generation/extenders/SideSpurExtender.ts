@@ -10,6 +10,9 @@ import {
 } from "../WorldGenConfig";
 import type { SectionAssemblyContext, SectionExtender } from "../SectionAssembler";
 
+/** Расстояние от ведьмы-охранника ниши до её сундука вдоль рукава, м. */
+const WITCH_GUARD_OFFSET = 2.8;
+
 /**
  * Боковые перпендикулярные ниши-тупики (см. SideSpurSpec).
  *
@@ -45,6 +48,7 @@ export class SideSpurExtender implements SectionExtender {
 
     const spurLength = randRange(rng, SIDE_SPUR_LENGTH.min, SIDE_SPUR_LENGTH.max);
     const half = SIDE_SPUR_WIDTH / 2;
+    const chestZ = spurLength - 1.6;
     const doorX = side === "right" ? spec.width / 2 : -spec.width / 2;
     const doorWorld = localToWorld(spec, doorX, doorZ);
     // Курс ниши — курс родителя В ТОЧКЕ проёма, повёрнутый на ±90°: рукав
@@ -62,13 +66,15 @@ export class SideSpurExtender implements SectionExtender {
       witch: {
         id: ctx.ids.nextWitch(),
         x: randRange(rng, -(half - 1), half - 1),
-        z: clamp(spurLength * 0.4, 2, spurLength - 3),
+        // Охранник стоит между входом и сундуком, в ~2.8 м от него (дальше радиуса
+        // боя 2.0): гуляет вокруг этой точки, пока игрок не заметит/не будет замечен.
+        z: clamp(chestZ - WITCH_GUARD_OFFSET, 2, spurLength - 3),
         spellId: content.spellId,
       },
       chest: {
         id: ctx.ids.nextChest(),
         x: randRange(rng, -(half - 1), half - 1),
-        z: spurLength - 1.6,
+        z: chestZ,
         bookIds: [],
         pageIds: [],
         dynamic: { slots: content.chestSlots },

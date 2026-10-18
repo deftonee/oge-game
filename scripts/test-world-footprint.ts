@@ -30,10 +30,11 @@ import type { FootprintPiece, WallSeg } from "../src/world/geometry/Footprint";
 import { distPointToSegment, localToWorld } from "../src/world/geometry/SectionGeometry";
 import type { Vec2 } from "../src/world/geometry/SectionGeometry";
 import { GameState } from "../src/core/GameState";
+import { scaled } from "./lib/testScale";
 
 declare const process: { exit(code?: number): never; env: Record<string, string | undefined> };
 
-const SEEDS = Number(process.env.SEEDS ?? 120);
+const SEEDS = scaled(30, 120);
 const AGENT_RADIUS = 0.4; // эллипсоид игрока, см. PlayerController
 const CELL = 0.25;
 

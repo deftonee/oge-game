@@ -20,7 +20,12 @@
     "test:chest": "esbuild scripts/test-chest.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-chest.cjs && node .tmp/test-chest.cjs",
     "test:loot-ui": "esbuild scripts/test-loot-ui.ts --bundle --platform=node --format=cjs --define:import.meta.env.DEV=false --outfile=.tmp/test-loot-ui.cjs && node .tmp/test-loot-ui.cjs",
     "test:mobile": "esbuild scripts/test-mobile-controls.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-mobile-controls.cjs && node .tmp/test-mobile-controls.cjs",
-    "test:world": "npm run test:world-gen && npm run test:world-footprint && npm run test:chunk-collisions && npm run test:streaming-window && npm run test:world-extend && npm run test:world-streamer"
+    "test:world": "npm run test:world-gen && npm run test:world-footprint && npm run test:chunk-collisions && npm run test:streaming-window && npm run test:world-extend && npm run test:world-streamer",
+    "test:witch-ai": "esbuild scripts/test-witch-ai.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-witch-ai.cjs && node .tmp/test-witch-ai.cjs",
+    "test:stealth": "esbuild scripts/test-stealth.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-stealth.cjs && node .tmp/test-stealth.cjs",
+    "test:world:full": "npm run test:world-gen -- --full && npm run test:world-footprint -- --full && npm run test:chunk-collisions -- --full && npm run test:streaming-window -- --full && npm run test:world-extend -- --full && npm run test:world-streamer -- --full",
+    "test:fast": "npm run test:witch-ai && npm run test:stealth && npm run test:section-content && npm run test:witch-figure && npm run test:chest && npm run test:spells && npm run test:loot && npm run test:loot-ui && npm run test:mobile",
+    "test": "npm run test:fast && npm run test:world"
   },
   "dependencies": {
     "@babylonjs/core": "^7.35.0"

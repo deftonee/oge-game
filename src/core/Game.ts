@@ -11,7 +11,9 @@ import { ProximityDetector } from "../world/proximity";
 import { GameState } from "./GameState";
 import { MobileControls } from "../mobile/MobileControls";
 import { OwlCompanion } from "../entities/OwlCompanion";
+import { StealthManager } from "../stealth/StealthManager";
 import type { PlayerController } from "./PlayerController";
+import type { GameManagers } from "./managers";
 import type { WorldStreamer } from "../world/WorldStreamer";
 import type { FogManager } from "../world/FogManager";
 
@@ -31,6 +33,8 @@ export class Game {
   private readonly proximity: ProximityDetector;
   private readonly mobile: MobileControls;
   private readonly owl: OwlCompanion;
+  private readonly stealth: StealthManager;
+  private readonly hud: GameManagers["hud"];
   private readonly anyMenuOpen: () => boolean;
   private readonly duelRoundsToWin: () => number;
 
@@ -55,6 +59,11 @@ export class Game {
     this.owl = new OwlCompanion(scene, player.position);
 
     const managers = createManagers(uiRoot, gameState, cooldown);
+    this.hud = managers.hud;
+
+    // Стелс: кусты прячут игрока, ведьмы видят конусом и ходят сами.
+    const stealth = new StealthManager(scene, player, streamer);
+    this.stealth = stealth;
 
     this.duelRoundsToWin = () =>
       duelRoundsFor(streamer.sectionAt(player.position.x, player.position.z));
@@ -67,6 +76,7 @@ export class Game {
       hud: managers.hud,
       cooldown,
       duelRoundsToWin: this.duelRoundsToWin,
+      isPlayerHidden: () => stealth.isHidden,
     });
     this.proximity = proximity;
 
@@ -133,7 +143,7 @@ export class Game {
   }
 
   private startRenderLoop(): void {
-    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl } = this;
+    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, stealth, hud } = this;
 
     engine.runRenderLoop(() => {
       const dt = engine.getDeltaTime() / 1000;
@@ -161,6 +171,11 @@ export class Game {
       // неотрисованный участок до башни.
       streamer.update(player.position.x, player.position.z);
       fog.update(streamer.frontierIndex(), dt);
+
+      // Стелс ПЕРЕД проксимити: сначала ведьмы сделали шаг и обновилась «спрятан ли игрок»,
+      // и уже по свежим позициям проверяем, не началась ли встреча.
+      stealth.update(dt, menuOpen);
+      hud.setStealthBadge(stealth.isHidden ? "🌿 В укрытии — ведьмы тебя не видят" : null);
 
       proximity.update(menuOpen);
 

@@ -10,6 +10,8 @@ import { Bonfire } from "../entities/Bonfire";
 import { PracticeTarget } from "../entities/PracticeTarget";
 import { Chest } from "../entities/Chest";
 import { EnergyGate } from "../entities/EnergyGate";
+import type { BushVolume } from "../stealth/bushes";
+import type { TreeVolume } from "../stealth/cover";
 
 /**
  * Держит в памяти только секцию, где сейчас игрок, и её ближайших соседей
@@ -218,6 +220,16 @@ export class WorldStreamer {
 
   public getActiveGates(): EnergyGate[] {
     return this.collectActive((c) => c.gates);
+  }
+
+  /** Кусты-укрытия построенных секций (стелс: игрок внутри — невидим для ведьм). */
+  public getActiveBushes(): BushVolume[] {
+    return this.collectActive((c) => c.bushVolumes);
+  }
+
+  /** Деревья рощ построенных секций (стелс: перекрывают обзор ведьм). */
+  public getActiveTrees(): TreeVolume[] {
+    return this.collectActive((c) => c.treeVolumes);
   }
 
   /** Общий сбор сущностей по всем чанкам (построенным и нет — игровой код сам фильтрует). */
