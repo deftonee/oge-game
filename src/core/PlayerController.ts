@@ -8,6 +8,20 @@ import {
   TransformNode,
 } from "@babylonjs/core";
 
+/** Размеры торса блочного персонажа (м) и высота его центра над ногами. */
+const TORSO = { width: 0.7, height: 0.8, depth: 0.4, centerY: 1.0 } as const;
+
+/**
+ * Точка крепления на спине: начало координат — центр задней грани торса,
+ * ось −z уходит НАЗАД от персонажа, +y вверх. Вешать на неё можно что угодно
+ * (рюкзак, колчан…) — PlayerController про содержимое не знает.
+ */
+export interface BackMount {
+  node: TransformNode;
+  /** Размеры торса: по ним навесное подгоняет свой размер и ремни. */
+  torso: { width: number; height: number; depth: number };
+}
+
 /**
  * Простой персонаж от третьего лица без физдвижка:
  * - коллайдер — невидимый бокс с checkCollisions + ellipsoid, двигаем через moveWithCollisions
@@ -16,6 +30,8 @@ import {
  */
 export class PlayerController {
   public readonly collider: Mesh;
+  /** Где у персонажа спина (дочерний узел визуала: поворачивается вместе с ним и прозрачнеет в кустах). */
+  public readonly backMount: BackMount;
   private readonly visual: TransformNode;
   private readonly scene: Scene;
   private readonly inputMap: Record<string, boolean> = {};
@@ -42,6 +58,7 @@ export class PlayerController {
 
     this.visual = this.buildBlockyCharacter();
     this.visual.parent = this.collider;
+    this.backMount = this.createBackMount();
     // Визуал центрируется на коллайдере: ноги модели (низ ног на y=0 в
     // локальных координатах модели) стоят ровно на полу, когда коллайдер
     // лежит на нём. Раньше визуал был опущен на -0.9 — персонаж наполовину
@@ -68,9 +85,9 @@ export class PlayerController {
     head.position.y = 1.55;
     head.parent = root;
 
-    const torso = MeshBuilder.CreateBox("torso", { width: 0.7, height: 0.8, depth: 0.4 }, this.scene);
+    const torso = MeshBuilder.CreateBox("torso", { width: TORSO.width, height: TORSO.height, depth: TORSO.depth }, this.scene);
     torso.material = shirt;
-    torso.position.y = 1.0;
+    torso.position.y = TORSO.centerY;
     torso.parent = root;
 
     const legL = MeshBuilder.CreateBox("legL", { width: 0.3, height: 0.8, depth: 0.35 }, this.scene);
@@ -92,6 +109,14 @@ export class PlayerController {
     armR.parent = root;
 
     return root;
+  }
+
+  private createBackMount(): BackMount {
+    const node = new TransformNode("backMount", this.scene);
+    node.parent = this.visual;
+    // Персонаж смотрит в +z, значит спина — в −z; узел стоит на середине задней грани торса.
+    node.position.set(0, TORSO.centerY, -TORSO.depth / 2);
+    return { node, torso: { width: TORSO.width, height: TORSO.height, depth: TORSO.depth } };
   }
 
   private setupInput(): void {

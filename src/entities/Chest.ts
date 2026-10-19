@@ -10,6 +10,9 @@ import { Book, BookPage, getBookById, getBookPageById } from "../data/books";
 import { GameState } from "../core/GameState";
 import { resolveChestLoot } from "../learning/chestLoot";
 
+/** Высота (м) точки над крышкой сундука: верх крышки (0.84) с небольшим запасом. */
+const CHEST_OPENING_HEIGHT = 0.9;
+
 export interface ChestOptions {
   id: string;
   /** Точное содержимое (рукописные сундуки). У динамических сундуков пусто. */
@@ -53,6 +56,11 @@ export class Chest {
 
   public get position(): Vector3 {
     return this.root.position;
+  }
+
+  /** Точка над крышкой (мировые координаты): отсюда «вылетают» находки при открытии. */
+  public get openingPoint(): Vector3 {
+    return this.root.position.add(new Vector3(0, CHEST_OPENING_HEIGHT, 0));
   }
 
   public get isOpened(): boolean {

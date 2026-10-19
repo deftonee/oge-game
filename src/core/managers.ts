@@ -7,6 +7,7 @@ import { PracticeManager } from "../practice/PracticeManager";
 import { GateManager } from "../gates/GateManager";
 import { SpellGraphScreen } from "../ui/SpellGraphScreen";
 import { ChestLootScreen } from "../ui/ChestLootScreen";
+import { LootPresenter } from "../ui/loot/LootPresenter";
 
 export interface GameManagers {
   hud: Hud;
@@ -16,6 +17,8 @@ export interface GameManagers {
   practice: PracticeManager;
   gates: GateManager;
   chestLoot: ChestLootScreen;
+  /** Полноэкранная презентация находок (вылет из сундука → рюкзак). */
+  lootPresenter: LootPresenter;
 }
 
 /**
@@ -67,5 +70,7 @@ export function createManagers(
 
   const chestLoot = new ChestLootScreen(uiRoot, gameState);
 
-  return { hud, spellGraph, combat, learning, practice, gates, chestLoot };
+  const lootPresenter = new LootPresenter(uiRoot);
+
+  return { hud, spellGraph, combat, learning, practice, gates, chestLoot, lootPresenter };
 }

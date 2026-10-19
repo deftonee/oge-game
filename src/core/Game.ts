@@ -11,6 +11,8 @@ import { ProximityDetector } from "../world/proximity";
 import { GameState } from "./GameState";
 import { MobileControls } from "../mobile/MobileControls";
 import { OwlCompanion } from "../entities/OwlCompanion";
+import { Backpack } from "../entities/Backpack";
+import { ScreenProjector } from "./screenProjection";
 import { StealthManager } from "../stealth/StealthManager";
 import type { PlayerController } from "./PlayerController";
 import type { GameManagers } from "./managers";
@@ -33,6 +35,8 @@ export class Game {
   private readonly proximity: ProximityDetector;
   private readonly mobile: MobileControls;
   private readonly owl: OwlCompanion;
+  private readonly backpack: Backpack;
+  private readonly lootPresenter: GameManagers["lootPresenter"];
   private readonly stealth: StealthManager;
   private readonly hud: GameManagers["hud"];
   private readonly anyMenuOpen: () => boolean;
@@ -58,8 +62,13 @@ export class Game {
     this.camera = createOrbitCamera(scene, canvas, player);
     this.owl = new OwlCompanion(scene, player.position);
 
+    // Рюкзак на спине: показывает собранные книги (после перезапуска/пересборки — сразу, без анимации).
+    this.backpack = new Backpack(scene, player.backMount);
+    this.backpack.syncBooks(gameState.getCollectedBookIds());
+
     const managers = createManagers(uiRoot, gameState, cooldown);
     this.hud = managers.hud;
+    this.lootPresenter = managers.lootPresenter;
 
     // Стелс: кусты прячут игрока, ведьмы видят конусом и ходят сами.
     const stealth = new StealthManager(scene, player, streamer);
@@ -84,6 +93,8 @@ export class Game {
       managers,
       proximity,
       gameState,
+      backpack: this.backpack,
+      screen: new ScreenProjector(scene, this.camera, engine, () => canvas.getBoundingClientRect()),
       duelRoundsToWin: this.duelRoundsToWin,
       emulateMobile,
     });
@@ -143,7 +154,7 @@ export class Game {
   }
 
   private startRenderLoop(): void {
-    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, stealth, hud } = this;
+    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, backpack, lootPresenter, stealth, hud } = this;
 
     engine.runRenderLoop(() => {
       const dt = engine.getDeltaTime() / 1000;
@@ -163,6 +174,8 @@ export class Game {
       // Сова летит по орбите вокруг игрока; пересчитываем ПОСЛЕ player.update,
       // чтобы целевая позиция брала уже обновлённую точку.
       owl.update(dt, player.position);
+      backpack.update(dt);
+      lootPresenter.update(dt);
 
       // Камера мягко следует за игроком.
       camera.target = Vector3.Lerp(camera.target, player.position, Math.min(1, dt * 8));
@@ -186,5 +199,7 @@ export class Game {
   public dispose(): void {
     this.engine.stopRenderLoop();
     this.owl.dispose();
+    this.backpack.dispose();
+    this.lootPresenter.dispose();
   }
 }

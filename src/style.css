@@ -1069,3 +1069,388 @@ body.emulate-mobile .joy-zone {
 body.emulate-mobile [class$="-panel"] {
   max-width: calc(min(100vw, 100vh * 9 / 16) - 48px);
 }
+
+/* ===== Презентация находок из сундука ================================== */
+/* Анимируются только transform/opacity (композитор). Никаких filter/blend-mode:
+   они дороги на слабых GPU. Размер карточки задаёт JS через font-size: всё внутри в em. */
+
+.loot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 25; /* выше меню (15/20) */
+  overflow: hidden;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: lootFadeIn 0.25s ease both;
+}
+
+.loot-overlay.is-closing {
+  pointer-events: none;
+  animation: lootFadeOut 0.3s ease forwards;
+}
+
+.loot-backdrop {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 48%, rgba(74, 44, 12, 0.6), rgba(5, 6, 12, 0.9) 72%);
+}
+
+.loot-sparks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.loot-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loot-actor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+.loot-glow {
+  position: absolute;
+  left: -40%;
+  top: -28%;
+  width: 180%;
+  height: 156%;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(var(--accent-rgb, 255, 210, 79), 0.9),
+    rgba(var(--accent-rgb, 255, 210, 79), 0.4) 55%,
+    rgba(var(--accent-rgb, 255, 210, 79), 0)
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loot-counter {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 600 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ead9ae;
+  opacity: 0.85;
+}
+
+.loot-hint {
+  /* вверху, под счётчиком: внизу экрана уже живёт подсказка HUD */
+  position: absolute;
+  top: calc(max(14px, env(safe-area-inset-top)) + 22px);
+  left: 0;
+  right: 0;
+  padding: 0 12px;
+  text-align: center;
+  font: 12px/1.3 system-ui, sans-serif;
+  color: #c2b18a;
+  opacity: 0.75;
+}
+
+@keyframes lootFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lootFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.loot-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  font-family: "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+  color: #3b2610;
+}
+
+/* ---- Страница старой книги ------------------------------------------ */
+
+.loot-page__paper {
+  position: absolute;
+  inset: 0;
+  border-radius: 0.35em;
+  background-color: #dcc48c;
+  /* запасной вид, пока/если не готова текстура из канваса (она ложится поверх инлайном) */
+  background-image: radial-gradient(ellipse at 30% 20%, #efdcae, #d9bb7c 68%, #b08d4f);
+  background-size: 100% 100%;
+  box-shadow:
+    0 0.6em 1.8em rgba(0, 0, 0, 0.55),
+    inset 0 0 2.2em rgba(90, 55, 20, 0.5),
+    inset 0 0 0 0.08em rgba(80, 50, 20, 0.6);
+}
+
+.loot-page__frame {
+  position: absolute;
+  inset: 1.4em;
+  box-sizing: border-box;
+  border: 0.12em solid rgba(110, 70, 28, 0.75);
+  outline: 0.06em solid rgba(110, 70, 28, 0.5);
+  outline-offset: 0.22em;
+  padding: 1.5em 1.3em 3em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.45em;
+}
+
+.loot-page__eyebrow {
+  font-size: 0.78em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(90, 58, 22, 0.8);
+}
+
+.loot-page__book {
+  font-size: 0.8em;
+  font-style: italic;
+  color: rgba(90, 58, 22, 0.75);
+}
+
+.loot-page__title {
+  margin: 0.3em 0 0;
+  font-size: 1.75em;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #2f1c08;
+}
+
+.loot-page__initial {
+  display: inline-block;
+  margin-right: 0.04em;
+  font-size: 1.55em;
+  line-height: 0.9;
+  font-weight: 800;
+  color: var(--accent);
+  text-shadow: 0.03em 0.03em 0 rgba(60, 35, 10, 0.55);
+}
+
+.loot-page__rule {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  width: 82%;
+  font-size: 1.15em;
+  color: var(--accent);
+}
+
+.loot-page__rule::before,
+.loot-page__rule::after {
+  content: "";
+  flex: 1;
+  height: 0.07em;
+  background: linear-gradient(90deg, transparent, rgba(110, 70, 28, 0.7), transparent);
+}
+
+.loot-page__law {
+  margin: 0.3em 0 0;
+  font-size: 1em;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.loot-page__formula {
+  margin: 0.4em 0;
+  padding: 0.4em 0.8em;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  font-family: "Cambria Math", "Cambria", "Times New Roman", serif;
+  font-size: 1.4em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #24140a;
+  background: rgba(255, 248, 225, 0.35);
+  border: 0.08em solid rgba(110, 70, 28, 0.55);
+  border-radius: 0.25em;
+  box-shadow: inset 0 0 0.6em rgba(110, 70, 28, 0.25);
+}
+
+.loot-page__hint {
+  margin-top: auto;
+  padding: 0.3em 0.8em;
+  font-size: 0.8em;
+  border-radius: 1em;
+  background: rgba(255, 248, 225, 0.4);
+}
+
+.loot-page__hint.loot-ok { color: #2a6a2a; }
+.loot-page__hint.loot-wait { color: #7a4a14; }
+
+.loot-page__seal {
+  position: absolute;
+  right: 0.9em;
+  bottom: 0.9em;
+  width: 2.5em;
+  height: 2.5em;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 1.05em;
+  background: radial-gradient(circle at 35% 30%, #d9534f, #8e1f1c 70%);
+  box-shadow:
+    0 0.12em 0.3em rgba(0, 0, 0, 0.5),
+    inset 0 0 0 0.14em rgba(255, 255, 255, 0.12),
+    inset 0 -0.15em 0.3em rgba(0, 0, 0, 0.35);
+  transform: rotate(-12deg);
+}
+
+.loot-page__folio {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0.7em;
+  text-align: center;
+  font-size: 0.85em;
+  letter-spacing: 0.1em;
+  color: rgba(90, 58, 22, 0.8);
+}
+
+/* ---- Кожаный фолиант ------------------------------------------------- */
+
+.loot-book__block {
+  position: absolute;
+  left: 0.6em;
+  right: -0.5em;
+  top: 0.5em;
+  bottom: -0.5em;
+  border-radius: 0.2em 0.5em 0.5em 0.2em;
+  background: repeating-linear-gradient(180deg, #f1e5c0 0 0.1em, #cdb98a 0.1em 0.2em);
+  box-shadow: 0 0.6em 1.6em rgba(0, 0, 0, 0.55);
+}
+
+.loot-book__cover {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 0.45em 0.9em 0.9em 0.45em;
+  background: linear-gradient(135deg, var(--cover-light), var(--cover) 45%, var(--cover-dark));
+  box-shadow:
+    inset 0 0 0 0.1em rgba(255, 255, 255, 0.12),
+    inset 0 0 2em rgba(0, 0, 0, 0.45),
+    inset -0.2em 0 0.6em rgba(0, 0, 0, 0.25);
+}
+
+.loot-book__spine {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2em;
+  box-sizing: border-box;
+  padding: 2.2em 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.45), rgba(255, 255, 255, 0.08) 55%, rgba(0, 0, 0, 0.25));
+}
+
+.loot-book__spine i {
+  display: block;
+  height: 0.35em;
+  background: linear-gradient(180deg, #f3d27a, #a77a24);
+  box-shadow: 0 0.05em 0.1em rgba(0, 0, 0, 0.5);
+}
+
+.loot-book__face {
+  position: absolute;
+  left: 2.4em;
+  right: 1.2em;
+  top: 1.2em;
+  bottom: 1.2em;
+}
+
+.loot-book__frame {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 1.2em 0.9em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  text-align: center;
+  border: 0.14em solid #d9b45a;
+  outline: 0.06em solid rgba(217, 180, 90, 0.6);
+  outline-offset: 0.25em;
+  color: #f6e3ae;
+  text-shadow: 0 0.08em 0.15em rgba(0, 0, 0, 0.6);
+}
+
+.loot-book__crest {
+  width: 1.7em;
+  height: 1.7em;
+  display: grid;
+  place-items: center;
+  font-size: 2.6em;
+  border-radius: 50%;
+  border: 0.06em solid #d9b45a;
+  background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.28));
+}
+
+.loot-book__title {
+  font-size: 1.25em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #f9e7b4;
+}
+
+.loot-book__school {
+  font-size: 0.85em;
+  letter-spacing: 0.06em;
+  opacity: 0.9;
+}
+
+.loot-book__orn {
+  font-size: 0.9em;
+  letter-spacing: 0.4em;
+  color: #d9b45a;
+}
+
+.loot-book__note {
+  margin-top: 0.5em;
+  font-size: 0.75em;
+  line-height: 1.35;
+  font-style: italic;
+  color: rgba(246, 227, 174, 0.85);
+}
+
+.loot-book__strap {
+  position: absolute;
+  right: -0.1em;
+  top: 44%;
+  width: 3.2em;
+  height: 1.4em;
+  border-radius: 0.15em 0 0 0.15em;
+  background: linear-gradient(180deg, #5a3418, #3a2010);
+  box-shadow: 0 0.1em 0.3em rgba(0, 0, 0, 0.5);
+}
+
+.loot-book__strap b {
+  position: absolute;
+  left: 0.5em;
+  top: 50%;
+  width: 0.7em;
+  height: 0.7em;
+  margin-top: -0.35em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffe9a0, #b8872e);
+}

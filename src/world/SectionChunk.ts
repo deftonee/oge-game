@@ -1,4 +1,4 @@
-import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3, Matrix, Quaternion } from "@babylonjs/core";
+import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3 } from "@babylonjs/core";
 import type { SectionSpec, ScatterSeed, BorderStyle } from "./spec/SectionSpec";
 import { localToWorld, yawAt } from "./geometry/SectionGeometry";
 import { FootprintIndex, type FootprintPiece, type WallSeg } from "./geometry/Footprint";
@@ -11,6 +11,16 @@ import type { BushVolume } from "../stealth/bushes";
 import { eyeLevelRadius, type TreeVolume } from "../stealth/cover";
 import { getSpellById } from "../data/spells";
 import { GameState } from "../core/GameState";
+import { getQuality } from "../core/quality";
+import { createGrassTuft, scatterGrass } from "../render/grass";
+import {
+  BUSH_ENVELOPE_RADIUS,
+  CANOPY_ENVELOPE_RADIUS,
+  createBush,
+  createCanopy,
+  createThicketBase,
+  variantKeyAt,
+} from "../render/foliage";
 
 /**
  * Один "чанк" мира — пол, стены, трава, кусты, ведьмы, костры и сундуки одной
@@ -110,7 +120,7 @@ export class SectionChunk {
     // отдельные заплатки.
     this.buildFloors();
     this.buildBoundaryWalls(wallMat);
-    this.buildScatter(this.spec.grass, "grass");
+    this.buildGrass();
     this.buildBushes();
     this.buildTrees();
     this.buildBorder(this.spec.borderLeft);
@@ -204,69 +214,59 @@ export class SectionChunk {
   }
 
   /**
-   * Трава — один меш-образец, все точки — тонкие инстансы (один draw call
-   * на всю траву секции вместо сотен мешей).
+   * Трава — один меш-пучок, все точки — тонкие инстансы (один draw call на всю
+   * траву секции вместо сотен мешей). Каждый сид spec разворачивается в
+   * несколько пучков вокруг своей точки (сколько — решает профиль качества:
+   * на слабых устройствах пучок один и из меньшего числа травинок), см. render/grass.
    *
-   * ВАЖНО: матрицы thinInstanceAdd умножаются на собственную мировую матрицу
+   * ВАЖНО: матрицы тонких инстансов умножаются на собственную мировую матрицу
    * базового меша ("the original mesh is the parent of the instances" —
    * подтверждено на форуме Babylon.js). Поэтому базовый меш обязан остаться
    * в identity-трансформе (позиция 0,0,0, без поворота/масштаба) — иначе
    * все инстансы получают двойное преобразование и улетают в случайные
-   * точки далеко за пределы поля.
+   * точки далеко за пределы поля. Он же обязан оставаться видимым: у тонких
+   * инстансов нет отдельного объекта для рендера, рисует сам базовый меш.
    *
    * Позиции сидов переведены в МИРОВЫЕ координаты секции (поворот yaw учтён
    * в матрице инстанса вместе с собственным вращением сида).
    */
-  private buildScatter(seeds: ScatterSeed[], kind: "grass"): void {
+  private buildGrass(): void {
+    const seeds = this.spec.grass;
     if (seeds.length === 0) return;
 
-    const mat = this.makeMaterial(`${kind}Mat_${this.spec.index}`, "#5fae4a");
-    const base = MeshBuilder.CreateCylinder(
-      `${kind}_${this.spec.index}`,
-      { diameterTop: 0, diameterBottom: 0.18, height: 0.4 },
-      this.scene
-    );
-    base.material = mat;
-    this.scatterInstances(base, seeds, 0.2);
-    this.disposables.push(base, mat);
+    const quality = getQuality();
+    const base = createGrassTuft(this.scene, `grass_${this.spec.index}`, quality.grassBladesPerTuft);
+    const points = seeds.map((s) => {
+      const world = this.toWorld(s.x, s.z);
+      return { x: world.x, z: world.z, rot: this.spec.yaw + s.rot, scale: s.scale };
+    });
+    scatterGrass(base, points, quality.grassTuftsPerSeed);
+    this.disposables.push(base);
   }
-
-  /** Диаметр базовой сферы куста; радиус кроны в мире = BUSH_BASE_RADIUS × scale сида. */
-  private static readonly BUSH_BASE_DIAMETER = 2.4;
 
   /**
    * Кусты-укрытия: КАЖДЫЙ куст — отдельный меш (а не инстанс общего).
    * Причина: у instanced mesh в Babylon нет собственной прозрачности
    * ("Setting visibility on an instanced mesh has no effect"), а нам нужно
    * делать полупрозрачным только тот куст, в котором стоит игрок. Кустов
-   * мало (см. generateBushSeeds), общий материал и разные меши — дёшево.
+   * мало (см. generateBushSeeds), а клон шаблона (render/foliage) делит
+   * геометрию и материал с остальными — разные меши стоят дёшево.
    *
-   * Заодно запоминаем круги кустов (bushVolumes) — по ним StealthManager
-   * решает, спрятан ли игрок. y центра = радиус × scale, чтобы низ куста лежал на земле.
+   * Габарит куста — сфера радиуса BUSH_ENVELOPE_RADIUS × scale (комки листвы
+   * лежат внутри неё), по ней StealthManager решает, спрятан ли игрок.
+   * y центра = радиус × scale, чтобы низ куста лежал на земле.
    */
   private buildBushes(): void {
     const seeds = this.spec.bushes;
     if (seeds.length === 0) return;
 
-    const mat = this.makeMaterial(`bushMat_${this.spec.index}`, "#1f3d22");
-    // Чуть матовый куст — глянец травы не должен "забивать" его на фоне.
-    mat.specularColor = new Color3(0.05, 0.05, 0.05);
-    mat.specularPower = 32;
-    this.disposables.push(mat);
-
-    const baseRadius = SectionChunk.BUSH_BASE_DIAMETER / 2;
+    const baseRadius = BUSH_ENVELOPE_RADIUS;
     seeds.forEach((s, i) => {
       const world = this.toWorld(s.x, s.z);
-      const mesh = MeshBuilder.CreateSphere(
-        `bush_${this.spec.index}_${i}`,
-        { diameter: SectionChunk.BUSH_BASE_DIAMETER, segments: 6 },
-        this.scene
-      );
-      mesh.material = mat;
+      const mesh = createBush(this.scene, `bush_${this.spec.index}_${i}`, variantKeyAt(world.x, world.z));
       mesh.position.set(world.x, baseRadius * s.scale, world.z);
       mesh.scaling.setAll(s.scale);
       mesh.rotation.y = this.spec.yaw + s.rot;
-      mesh.isPickable = false; // не мешает лучу видимости ведьм
       this.disposables.push(mesh);
       const radius = baseRadius * s.scale;
       this.bushVolumes.push({
@@ -274,7 +274,7 @@ export class SectionChunk {
         x: world.x,
         z: world.z,
         radius,
-        blockRadius: eyeLevelRadius(radius, radius), // центр сферы на высоте radius
+        blockRadius: eyeLevelRadius(radius, radius), // центр габарита на высоте radius
         mesh,
         alpha: 1,
         setAlpha: (a) => {
@@ -287,12 +287,11 @@ export class SectionChunk {
   /**
    * Рощицы: деревья стоят кучками по 3–5 (см. generateTreeGroves) и перекрывают
    * обзор ведьм — за ними можно скрыться от взгляда. Ствол — тонкий коллайдер
-   * (сквозь дерево не пройти ни игроку, ни ведьме), крона — отдельная сфера
-   * на каждое дерево: её можно делать прозрачной, когда она между камерой
+   * (сквозь дерево не пройти ни игроку, ни ведьме), крона — отдельный меш
+   * (кучка комков листвы) на каждое дерево: её можно делать прозрачной, когда она между камерой
    * и игроком (см. StealthManager). Стволы — инстансы одной основы (1 draw call).
    */
   private static readonly TREE_TRUNK_HEIGHT = 2.0;
-  private static readonly TREE_CANOPY_RADIUS = 1.1;
   private static readonly TREE_CANOPY_Y = 2.0;
 
   private buildTrees(): void {
@@ -301,7 +300,6 @@ export class SectionChunk {
 
     const idx = this.spec.index;
     const trunkMat = this.makeMaterial(`treeTrunkMat_${idx}`, "#6b4a2f");
-    const canopyMat = this.makeMaterial(`treeCanopyMat_${idx}`, "#3f8a4a");
     const trunkBase = MeshBuilder.CreateCylinder(
       `treeTrunk_${idx}`,
       { diameterTop: 0.24, diameterBottom: 0.34, height: SectionChunk.TREE_TRUNK_HEIGHT, tessellation: 8 },
@@ -309,7 +307,7 @@ export class SectionChunk {
     );
     trunkBase.material = trunkMat;
     trunkBase.isVisible = false; // рендерятся только инстансы
-    this.disposables.push(trunkMat, canopyMat, trunkBase);
+    this.disposables.push(trunkMat, trunkBase);
 
     seeds.forEach((s, i) => {
       const world = this.toWorld(s.x, s.z);
@@ -320,12 +318,14 @@ export class SectionChunk {
       trunk.rotation.y = this.spec.yaw + s.rot;
       this.disposables.push(trunk);
 
-      const canopyRadius = SectionChunk.TREE_CANOPY_RADIUS * s.scale;
+      const canopyRadius = CANOPY_ENVELOPE_RADIUS * s.scale;
       const canopyY = SectionChunk.TREE_CANOPY_Y * s.scale;
-      const canopy = MeshBuilder.CreateSphere(`treeCanopy_${idx}_${i}`, { diameter: canopyRadius * 2, segments: 6 }, this.scene);
-      canopy.material = canopyMat;
+      // Крона — комки листвы внутри сферы-габарита (render/foliage); isPickable=false внутри
+      // createCanopy: не мешает лучу видимости ведьм (обзор считаем по кругам, см. cover.ts).
+      const canopy = createCanopy(this.scene, `treeCanopy_${idx}_${i}`, variantKeyAt(world.x, world.z));
       canopy.position.set(world.x, canopyY, world.z);
-      canopy.isPickable = false; // не мешает лучу видимости ведьм (обзор считаем по кругам, см. cover.ts)
+      canopy.scaling.setAll(s.scale);
+      canopy.rotation.y = this.spec.yaw + s.rot;
       this.disposables.push(canopy);
 
       // Невидимый ствол-коллайдер: тонкий цилиндр (имя не floor_/walls_, т.е. не часть проверяемой геометрии).
@@ -364,14 +364,21 @@ export class SectionChunk {
     const side = seeds === this.spec.borderLeft ? "L" : "R";
     const style: BorderStyle = this.spec.borderStyle;
 
+    if (style === "bushes") {
+      // Заросли — комки листвы из общего набора (render/foliage); материал общий, свой не нужен.
+      const baseName = `border${side}_${this.spec.index}`;
+      const base = createThicketBase(this.scene, baseName, variantKeyAt(this.spec.index, side === "L" ? 1 : 2));
+      const baseY = BUSH_ENVELOPE_RADIUS;
+      this.scatterInstances(base, seeds, baseY);
+      this.disposables.push(base);
+      this.registerThickets(base, seeds, baseY);
+      return;
+    }
+
     let base;
     let baseY: number;
     let color: string;
-    if (style === "bushes") {
-      color = "#2f5b34";
-      base = MeshBuilder.CreateSphere(`border${side}_${this.spec.index}`, { diameter: 2.4, segments: 6 }, this.scene);
-      baseY = 1.2;
-    } else if (style === "fence") {
+    if (style === "fence") {
       color = "#8a8f98";
       base = MeshBuilder.CreateBox(`border${side}_${this.spec.index}`, { width: 0.12, height: 1.3, depth: 0.12 }, this.scene);
       baseY = 0.65;
@@ -385,8 +392,6 @@ export class SectionChunk {
 
     this.scatterInstances(base, seeds, baseY);
     this.disposables.push(base, mat);
-
-    if (style === "bushes") this.registerThickets(base, mat, seeds, baseY);
   }
 
   /**
@@ -394,11 +399,11 @@ export class SectionChunk {
    * зайти внутрь и стать невидимым. Визуал — инстансы общей основы (один draw
    * call на сторону), а у инстансов прозрачности по одному нет. Поэтому, пока
    * в зарослях стоит игрок, соответствующий инстанс выключается и вместо него
-   * показывается призрачный меш-двойник (тот же материал, своя visibility);
-   * двойники создаются лениво — их одновременно единицы.
+   * показывается призрачный меш-двойник (клон основы: общая геометрия и материал,
+   * своя visibility); двойники создаются лениво — их одновременно единицы.
    */
-  private registerThickets(base: Mesh, mat: StandardMaterial, seeds: ScatterSeed[], baseY: number): void {
-    const baseRadius = 1.2; // диаметр основы 2.4
+  private registerThickets(base: Mesh, seeds: ScatterSeed[], baseY: number): void {
+    const baseRadius = BUSH_ENVELOPE_RADIUS;
     seeds.forEach((s, i) => {
       const inst = base.instances[i];
       if (!inst) return;
@@ -421,8 +426,9 @@ export class SectionChunk {
             return;
           }
           if (!ghost) {
-            ghost = MeshBuilder.CreateSphere(`${inst.name}_ghost`, { diameter: 2.4, segments: 6 }, this.scene);
-            ghost.material = mat;
+            ghost = base.clone(`${inst.name}_ghost`); // основа невидима — двойник включаем явно
+            ghost.isVisible = true;
+            ghost.setEnabled(true);
             ghost.position.copyFrom(inst.position);
             ghost.scaling.copyFrom(inst.scaling);
             ghost.rotation.copyFrom(inst.rotation);
@@ -438,43 +444,28 @@ export class SectionChunk {
   }
 
   /**
-   * Общий хелпер: раскладывает сиды как тонкие инстансы заданного базового меша.
+   * Раскладывает сиды бордюра как ПОЛНЫЕ instances (createInstance) базового меша.
    *
    * ВАЖНО: y центра = baseY * s.scale — масштабируется вместе с инстансом,
    * иначе при scale > 1 куст/столб «всплывают» над землёй, а при scale < 1
-   * зарываются в пол (раньше трава качалась на ±6 см, бордюрные кусты были
-   * наполовину в полу — отсюда жалоба «кустов не видно»). Базовые меши
-   * сконструированы так, что низ лежит на y=0 при canonical-масштабе.
+   * зарываются в пол (раньше бордюрные кусты были наполовину в полу — отсюда
+   * жалоба «кустов не видно»). Базовые меши сконструированы так, что низ лежит
+   * на y=0 при canonical-масштабе.
+   *
+   * Тонкие инстансы тут не годятся: база должна быть невидимой (рисуются только
+   * инстансы), а у тонких инстансов рисует сама база. Кусты-укрытия сюда не
+   * попадают — они отдельные меши, см. buildBushes().
    */
   private scatterInstances(base: Mesh, seeds: ScatterSeed[], baseY: number): void {
-    // Бордюрный декор — ПОЛНЫЕ instances (createInstance), не thin:
-    // thin-инстансинг в рантайме их не отрисовывал (баг не локализован, а
-    // полные instance копируют проверенный путь ведьм). Трава остаётся на
-    // thin (сотни штук на секцию, один draw call). Кусты-укрытия сюда не
-    // попадают — они отдельные меши, см. buildBushes().
-    if (base.name.startsWith("border")) {
-      for (const s of seeds) {
-        const world = this.toWorld(s.x, s.z);
-        const inst = base.createInstance(`${base.name}_i${base.instances.length}`);
-        inst.position.set(world.x, baseY * s.scale, world.z);
-        inst.scaling.setAll(s.scale);
-        inst.rotation.y = this.spec.yaw + s.rot;
-        this.disposables.push(inst);
-      }
-      base.isVisible = false; // рендерятся только инстансы; база — источник геометрии
-      return;
-    }
-    for (let i = 0; i < seeds.length; i++) {
-      const s = seeds[i];
+    for (const s of seeds) {
       const world = this.toWorld(s.x, s.z);
-      const matrix = Matrix.Compose(
-        new Vector3(s.scale, s.scale, s.scale),
-        Quaternion.RotationAxis(Vector3.Up(), this.spec.yaw + s.rot),
-        new Vector3(world.x, baseY * s.scale, world.z)
-      );
-      base.thinInstanceAdd(matrix, false);
+      const inst = base.createInstance(`${base.name}_i${base.instances.length}`);
+      inst.position.set(world.x, baseY * s.scale, world.z);
+      inst.scaling.setAll(s.scale);
+      inst.rotation.y = this.spec.yaw + s.rot;
+      this.disposables.push(inst);
     }
-    base.thinInstanceRefreshBoundingInfo(true);
+    base.isVisible = false; // рендерятся только инстансы; база — источник геометрии
   }
 
   // -------------------------------------------------------------------------

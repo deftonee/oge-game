@@ -1,6 +1,7 @@
 import type { ChestContents } from "../entities/Chest";
 import type { GameState } from "../core/GameState";
 import { getSchoolById, getSpellById } from "../data/spells";
+import { BOOK_NOTE, learnHint, learnHintText } from "./loot/lootItems";
 
 /**
  * Окно «Найдено в сундуке»: что за предметы выпали и что они дают.
@@ -69,7 +70,7 @@ export class ChestLootScreen {
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${school.color}">📖 ${book.title}</div>
           <div class="bonfire-spell-law">Ветка прокачки: ${school.icon} ${school.name}</div>
-          <div class="loot-note">Теперь заклинания этой школы можно изучать — осталось найти их страницы.</div>
+          <div class="loot-note">${BOOK_NOTE}</div>
         `;
         list.appendChild(item);
       }
@@ -80,15 +81,8 @@ export class ChestLootScreen {
         item.className = "loot-item loot-page";
         item.style.borderColor = spell.color;
 
-        let note: string;
-        if (this.gameState.canLearn(spell)) {
-          note = `<span class="loot-ok">✔ Можно изучить у костра</span>`;
-        } else {
-          const reasons: string[] = [];
-          for (const book of this.gameState.missingBooks(spell)) reasons.push(`книга «${getSchoolById(book.schoolId).pathName}»`);
-          for (const pre of this.gameState.missingPrerequisites(spell)) reasons.push(`изучить «${pre.name}»`);
-          note = `<span class="loot-wait">Пока нужно: ${reasons.join(", ") || "—"}</span>`;
-        }
+        const hint = learnHint(spell, this.gameState);
+        const note = `<span class="${hint.ok ? "loot-ok" : "loot-wait"}">${learnHintText(hint)}</span>`;
 
         item.innerHTML = `
           <div class="bonfire-spell-name" style="color:${spell.color}">📄 Страница «${spell.name}»</div>
