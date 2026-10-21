@@ -5,9 +5,16 @@ import type { GameManagers } from "./managers";
 import type { GameState } from "./GameState";
 import type { Backpack } from "../entities/Backpack";
 import type { Chest } from "../entities/Chest";
+import type { KeyBindings } from "./KeyBindings";
 import type { ScreenProjector } from "./screenProjection";
 import { buildLootItems } from "../ui/loot/lootItems";
 import type { LootItem } from "../ui/loot/lootItems";
+
+/** Фокус в поле ввода: клавиши идут в текст, а не в игровые действия. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable === true);
+}
 
 export interface InteractionApi {
   mobile: MobileControls;
@@ -19,6 +26,8 @@ export interface InteractionDeps {
   managers: GameManagers;
   proximity: ProximityDetector;
   gameState: GameState;
+  /** Ввод по действиям: какие клавиши за что отвечают, решают настройки игрока. */
+  keys: KeyBindings;
   /** Рюкзак игрока: находки улетают к нему, найденные книги появляются в нём. */
   backpack: Backpack;
   /** Мировая точка → точка на экране: откуда вылетают и куда улетают находки. */
@@ -29,8 +38,10 @@ export interface InteractionDeps {
 }
 
 /**
- * Ввод: общая логика клавиши E/мобильной кнопки «взаимодействие», горячие
- * клавиши (G — граф, Escape — закрыть меню) и создание мобильных контролов.
+ * Ввод: общая логика клавиши «взаимодействие»/мобильной кнопки, горячие клавиши
+ * (граф заклинаний; Escape — закрыть меню) и создание мобильных контролов.
+ * Клавиши действий переназначаются в настройках (см. KeyBindings); Escape как
+ * «закрыть/назад» зашит всегда.
  *
  * handleInteract использует результат детекта ближайших объектов (ProximityDetector):
  * ворота > костёр > сундук > дружелюбная ведьма > тренировочная цель.
@@ -101,16 +112,19 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
   };
 
   window.addEventListener("keydown", (e) => {
-    const key = e.key.toLowerCase();
-    if (key === "g" && !anyMenuOpen()) {
-      managers.spellGraph.toggle();
-    } else if (key === "escape") {
+    // Печать ответа в поле ввода (бой, костёр, ворота) не должна срабатывать как «взаимодействие» или «граф».
+    const typing = isTypingTarget(e.target);
+    if (e.code === "Escape") {
       if (managers.spellGraph.isOpen) managers.spellGraph.close();
       if (managers.learning.isActive) managers.learning.close();
       if (managers.practice.isActive) managers.practice.close();
       if (managers.gates.isActive) managers.gates.close();
       if (managers.chestLoot.isOpen) managers.chestLoot.close();
-    } else if (key === "e") {
+    } else if (typing) {
+      return;
+    } else if (deps.keys.matches("spellGraph", e) && !anyMenuOpen()) {
+      managers.spellGraph.toggle();
+    } else if (deps.keys.matches("interact", e)) {
       handleInteract();
     }
   });

@@ -24,6 +24,7 @@ export class Hud {
     hint.className = "hud-hint";
     hint.textContent = "WASD — движение · мышь — камера · G — граф заклинаний · E — взаимодействие рядом";
     uiRoot.appendChild(hint);
+    this.hintEl = hint;
 
     const lockedHint = document.createElement("div");
     lockedHint.className = "hud-locked-hint";
@@ -44,9 +45,15 @@ export class Hud {
     this.stealthBadgeEl = stealthBadge;
   }
 
+  private hintEl!: HTMLElement;
   private lockedHintEl!: HTMLElement;
   private interactHintEl!: HTMLElement;
   private stealthBadgeEl!: HTMLElement;
+
+  /** Подсказка управления внизу экрана (зависит от раскладки клавиш в настройках). */
+  public setControlsHint(text: string): void {
+    if (this.hintEl.textContent !== text) this.hintEl.textContent = text;
+  }
 
   /** Плашка стелса («🌿 В укрытии»); null — скрыть. */
   public setStealthBadge(text: string | null): void {

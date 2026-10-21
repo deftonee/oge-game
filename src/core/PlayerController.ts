@@ -7,6 +7,12 @@ import {
   Color3,
   TransformNode,
 } from "@babylonjs/core";
+import type { ActionId } from "../settings/settings";
+
+/** Что игроку нужно от ввода: зажато ли действие движения (клавиши — в настройках, см. KeyBindings). */
+export interface MovementInput {
+  isDown(action: ActionId): boolean;
+}
 
 /** Размеры торса блочного персонажа (м) и высота его центра над ногами. */
 const TORSO = { width: 0.7, height: 0.8, depth: 0.4, centerY: 1.0 } as const;
@@ -34,7 +40,6 @@ export class PlayerController {
   public readonly backMount: BackMount;
   private readonly visual: TransformNode;
   private readonly scene: Scene;
-  private readonly inputMap: Record<string, boolean> = {};
   private readonly moveSpeed = 6.5; // м/с
   private readonly gravity = -18;
   private verticalVelocity = 0;
@@ -45,7 +50,7 @@ export class PlayerController {
   /** Вектор мобильного стика (нормированный, y=+1 вперёд). null — нет тач-управления. */
   private joystickVec: { x: number; y: number } | null = null;
 
-  constructor(scene: Scene, spawnPosition: Vector3) {
+  constructor(scene: Scene, spawnPosition: Vector3, private readonly input: MovementInput) {
     this.scene = scene;
 
     // Коллайдер персонажа
@@ -64,8 +69,6 @@ export class PlayerController {
     // лежит на нём. Раньше визуал был опущен на -0.9 — персонаж наполовину
     // утопал в пол.
     this.visual.position = new Vector3(0, 0, 0);
-
-    this.setupInput();
   }
 
   private buildBlockyCharacter(): TransformNode {
@@ -119,15 +122,6 @@ export class PlayerController {
     return { node, torso: { width: TORSO.width, height: TORSO.height, depth: TORSO.depth } };
   }
 
-  private setupInput(): void {
-    window.addEventListener("keydown", (e) => {
-      this.inputMap[e.key.toLowerCase()] = true;
-    });
-    window.addEventListener("keyup", (e) => {
-      this.inputMap[e.key.toLowerCase()] = false;
-    });
-  }
-
   /** Задать вектор мобильного стика (нормированный, кадр-в-кадр). Нулевой вектор инертен. */
   public setJoystick(v: { x: number; y: number } | null): void {
     this.joystickVec = v;
@@ -150,10 +144,10 @@ export class PlayerController {
       if (this.joystickVec) {
         moveDir = moveDir.add(forward.scale(this.joystickVec.y)).add(right.scale(this.joystickVec.x));
       }
-      if (this.inputMap["w"] || this.inputMap["arrowup"]) moveDir = moveDir.add(forward);
-      if (this.inputMap["s"] || this.inputMap["arrowdown"]) moveDir = moveDir.subtract(forward);
-      if (this.inputMap["d"] || this.inputMap["arrowright"]) moveDir = moveDir.add(right);
-      if (this.inputMap["a"] || this.inputMap["arrowleft"]) moveDir = moveDir.subtract(right);
+      if (this.input.isDown("moveForward")) moveDir = moveDir.add(forward);
+      if (this.input.isDown("moveBack")) moveDir = moveDir.subtract(forward);
+      if (this.input.isDown("moveRight")) moveDir = moveDir.add(right);
+      if (this.input.isDown("moveLeft")) moveDir = moveDir.subtract(right);
     }
 
     if (moveDir.lengthSquared() > 0) {

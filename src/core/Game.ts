@@ -13,6 +13,11 @@ import { MobileControls } from "../mobile/MobileControls";
 import { OwlCompanion } from "../entities/OwlCompanion";
 import { Backpack } from "../entities/Backpack";
 import { ScreenProjector } from "./screenProjection";
+import { KeyBindings } from "./KeyBindings";
+import { applyCameraSettings, applyRenderScale } from "./applySettings";
+import { SettingsStore } from "../settings/SettingsStore";
+import { describeControlsHint } from "../settings/bindings";
+import { FpsCounter } from "../ui/FpsCounter";
 import { StealthManager } from "../stealth/StealthManager";
 import type { PlayerController } from "./PlayerController";
 import type { GameManagers } from "./managers";
@@ -36,6 +41,9 @@ export class Game {
   private readonly mobile: MobileControls;
   private readonly owl: OwlCompanion;
   private readonly backpack: Backpack;
+  private readonly settings: SettingsStore;
+  private readonly keys: KeyBindings;
+  private readonly fps: FpsCounter;
   private readonly lootPresenter: GameManagers["lootPresenter"];
   private readonly stealth: StealthManager;
   private readonly hud: GameManagers["hud"];
@@ -49,6 +57,10 @@ export class Game {
 
     setupLighting(scene);
 
+    // Настройки игрока и ввод по действиям: клавиши берутся из настроек, а не зашиты в код.
+    this.settings = new SettingsStore();
+    this.keys = new KeyBindings(this.settings);
+
     const gameState = new GameState();
     const cooldown = new EncounterCooldown();
     this.cooldown = cooldown;
@@ -57,7 +69,7 @@ export class Game {
     this.streamer = streamer;
     this.fog = fog;
 
-    const player = createPlayer(scene, spawnPoint);
+    const player = createPlayer(scene, spawnPoint, this.keys);
     this.player = player;
     this.camera = createOrbitCamera(scene, canvas, player);
     this.owl = new OwlCompanion(scene, player.position);
@@ -68,6 +80,18 @@ export class Game {
 
     const managers = createManagers(uiRoot, gameState, cooldown);
     this.hud = managers.hud;
+    this.fps = new FpsCounter(uiRoot);
+
+    // Настройки действуют сразу: применяем при запуске и при каждом изменении в меню.
+    const applySettings = (): void => {
+      const { controls, graphics } = this.settings.get();
+      applyCameraSettings(this.camera, controls);
+      applyRenderScale(engine, graphics.renderScale);
+      this.fps.setVisible(graphics.showFps);
+      this.hud.setControlsHint(describeControlsHint(controls.bindings));
+    };
+    this.settings.subscribe(applySettings);
+    applySettings();
     this.lootPresenter = managers.lootPresenter;
 
     // Стелс: кусты прячут игрока, ведьмы видят конусом и ходят сами.
@@ -93,6 +117,7 @@ export class Game {
       managers,
       proximity,
       gameState,
+      keys: this.keys,
       backpack: this.backpack,
       screen: new ScreenProjector(scene, this.camera, engine, () => canvas.getBoundingClientRect()),
       duelRoundsToWin: this.duelRoundsToWin,
@@ -159,6 +184,7 @@ export class Game {
     engine.runRenderLoop(() => {
       const dt = engine.getDeltaTime() / 1000;
       cooldown.tick(dt);
+      this.fps.update(engine.getFps(), dt);
 
       const menuOpen = this.anyMenuOpen();
       player.inputLocked = menuOpen;
@@ -201,5 +227,7 @@ export class Game {
     this.owl.dispose();
     this.backpack.dispose();
     this.lootPresenter.dispose();
+    this.keys.dispose();
+    this.fps.dispose();
   }
 }

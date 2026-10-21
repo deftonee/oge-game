@@ -1,11 +1,13 @@
 import { Scene, ArcRotateCamera, Vector3 } from "@babylonjs/core";
 import { PlayerController } from "./PlayerController";
+import type { MovementInput } from "./PlayerController";
 
 export function createPlayer(
   scene: Scene,
-  spawn: { x: number; y: number; z: number }
+  spawn: { x: number; y: number; z: number },
+  input: MovementInput
 ): PlayerController {
-  return new PlayerController(scene, new Vector3(spawn.x, spawn.y, spawn.z));
+  return new PlayerController(scene, new Vector3(spawn.x, spawn.y, spawn.z), input);
 }
 
 /**

@@ -1454,3 +1454,20 @@ body.emulate-mobile [class$="-panel"] {
   border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #ffe9a0, #b8872e);
 }
+
+/* ===== Счётчик FPS (настройки → Графика) ============================== */
+
+.hud-fps {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  font: 600 12px/1.4 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #cfe9d6;
+  background: rgba(16, 19, 31, 0.6);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  pointer-events: none;
+}

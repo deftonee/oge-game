@@ -8,9 +8,13 @@
  * на разных устройствах. Профиль влияет только на то, во сколько геометрии
  * материализуется один и тот же сид.
  *
- * Явный выбор: `?quality=low|mid|high` в адресе (удобно сравнивать на одном
- * устройстве и тестировать «слабое железо» на компьютере).
+ * Явный выбор, по убыванию приоритета: `?quality=low|mid|high` в адресе (удобно
+ * сравнивать на одном устройстве), затем настройка игрока (меню паузы → Графика),
+ * затем автоопределение. Уровень читается один раз при запуске — геометрия
+ * строится под него, поэтому смена в меню применяется при следующем запуске.
  */
+
+import { loadSettings } from "../settings/settingsStorage";
 
 export type QualityTier = "low" | "mid" | "high";
 
@@ -111,9 +115,20 @@ export function readProbe(): QualityProbe {
   }
   if (typeof window !== "undefined") {
     probe.coarsePointer = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
-    probe.override = new URLSearchParams(window.location?.search ?? "").get("quality");
+    probe.override = new URLSearchParams(window.location?.search ?? "").get("quality") ?? storedOverride();
   }
   return probe;
+}
+
+/** Выбор игрока из настроек; «auto» (и любое неизвестное значение) — не переопределяет автоопределение. */
+function storedOverride(): string | null {
+  const quality = loadSettings().graphics.quality;
+  return quality === "auto" ? null : quality;
+}
+
+/** Уровень, который выбрало бы автоопределение (без адреса и настроек) — для подсказок в меню. */
+export function detectAutoTier(): QualityTier {
+  return pickTier({ ...readProbe(), override: null });
 }
 
 let current: QualityProfile | null = null;
