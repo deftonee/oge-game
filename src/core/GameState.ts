@@ -8,7 +8,7 @@ import {
   getSpellsBySchool,
   isBridgeSpell,
 } from "../data/spells";
-import { Book, ChestLoot, booksRequiredFor, getPageBySpell } from "../data/books";
+import { Book, ChestLoot, booksRequiredFor, getBookById, getBookPageById, getPageBySpell } from "../data/books";
 
 export interface SpellProgress {
   learned: boolean;
@@ -16,6 +16,34 @@ export interface SpellProgress {
 }
 
 export const MAX_MASTERY = 5;
+
+/**
+ * Сериализуемый снимок прогресса (для сохранений). Только данные: ни Map, ни Set.
+ * Заклинания, книги и страницы — id из справочников (при загрузке неизвестные отбрасываются);
+ * ведьмы, ворота и сундуки — id из сгенерированного мира (годятся только для того же мира).
+ */
+export interface GameStateSnapshot {
+  learned: string[];
+  /** Мастерство только у тех, у кого оно больше нуля. */
+  mastery: Record<string, number>;
+  defeatedWitchIds: string[];
+  openedGateIds: string[];
+  openedChestIds: string[];
+  bookPageIds: string[];
+  bookIds: string[];
+  chestLoot: Record<string, ChestLoot>;
+}
+
+export interface RestoreOptions {
+  /**
+   * Восстанавливать ли прогресс, привязанный к конкретному миру (ведьмы, ворота, сундуки).
+   * false — когда мир другой (например, изменился генератор): книги, страницы и заклинания
+   * остаются, а id из старого мира не значат ничего.
+   */
+  world?: boolean;
+}
+
+export type GameStateListener = () => void;
 
 /**
  * Центральное состояние прокачки игрока. Ветки (школы) независимы: у каждой
@@ -34,13 +62,37 @@ export class GameState {
   private collectedBookIds = new Set<string>();
   /** Что именно лежало в открытом сундуке (содержимое динамических сундуков определяется при открытии). */
   private chestLoot = new Map<string, ChestLoot>();
+  private readonly listeners = new Set<GameStateListener>();
 
   constructor() {
+    this.resetProgress();
+  }
+
+  /** Подписка на любое реальное изменение прогресса (повторные вызовы с тем же результатом не считаются). */
+  public subscribe(listener: GameStateListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const l of [...this.listeners]) l();
+  }
+
+  /** Добавляет id в множество; сообщает подписчикам только если он там появился впервые. */
+  private addTo(set: Set<string>, id: string): void {
+    if (set.has(id)) return;
+    set.add(id);
+    this.notify();
+  }
+
+  private resetProgress(): void {
+    this.progress.clear();
     for (const spell of ALL_SPELLS) {
       this.progress.set(spell.id, { learned: false, mastery: 0 });
     }
     for (const id of STARTER_SPELL_IDS) {
-      this.learn(id);
+      const entry = this.progress.get(id);
+      if (entry) entry.learned = true;
     }
   }
 
@@ -58,7 +110,7 @@ export class GameState {
   }
 
   public markWitchDefeated(witchId: string): void {
-    this.defeatedWitchIds.add(witchId);
+    this.addTo(this.defeatedWitchIds, witchId);
   }
 
   public isWitchDefeated(witchId: string): boolean {
@@ -66,7 +118,7 @@ export class GameState {
   }
 
   public openGate(gateId: string): void {
-    this.openedGateIds.add(gateId);
+    this.addTo(this.openedGateIds, gateId);
   }
 
   public isGateOpen(gateId: string): boolean {
@@ -74,7 +126,7 @@ export class GameState {
   }
 
   public openChest(chestId: string): void {
-    this.openedChestIds.add(chestId);
+    this.addTo(this.openedChestIds, chestId);
   }
 
   public isChestOpen(chestId: string): boolean {
@@ -82,7 +134,7 @@ export class GameState {
   }
 
   public collectBookPage(pageId: string): void {
-    this.collectedBookPageIds.add(pageId);
+    this.addTo(this.collectedBookPageIds, pageId);
   }
 
   public hasBookPage(pageId: string): boolean {
@@ -100,7 +152,7 @@ export class GameState {
   // ---------- Книги и содержимое сундуков ----------
 
   public collectBook(bookId: string): void {
-    this.collectedBookIds.add(bookId);
+    this.addTo(this.collectedBookIds, bookId);
   }
 
   public hasBook(bookId: string): boolean {
@@ -117,10 +169,11 @@ export class GameState {
    * коллекцию игрока. Повторный вызов для того же сундука безопасен.
    */
   public recordChestLoot(chestId: string, loot: ChestLoot): void {
-    this.openedChestIds.add(chestId);
+    this.addTo(this.openedChestIds, chestId);
     this.chestLoot.set(chestId, { bookIds: [...loot.bookIds], pageIds: [...loot.pageIds] });
     for (const id of loot.bookIds) this.collectBook(id);
     for (const id of loot.pageIds) this.collectBookPage(id);
+    this.notify(); // содержимое сундука тоже часть прогресса, даже если сам сундук уже был помечен открытым
   }
 
   public getChestLoot(chestId: string): ChestLoot | undefined {
@@ -130,14 +183,76 @@ export class GameState {
 
   public learn(spellId: string): void {
     const entry = this.progress.get(spellId);
-    if (entry) entry.learned = true;
+    if (!entry || entry.learned) return;
+    entry.learned = true;
+    this.notify();
   }
 
   public addMastery(spellId: string, amount = 1): void {
     const entry = this.progress.get(spellId);
-    if (entry && entry.learned) {
-      entry.mastery = Math.min(MAX_MASTERY, entry.mastery + amount);
+    if (!entry || !entry.learned) return;
+    const next = Math.min(MAX_MASTERY, entry.mastery + amount);
+    if (next === entry.mastery) return;
+    entry.mastery = next;
+    this.notify();
+  }
+
+  // ---------- Сохранение и загрузка ----------
+
+  public snapshot(): GameStateSnapshot {
+    const mastery: Record<string, number> = {};
+    const learned: string[] = [];
+    for (const [id, entry] of this.progress) {
+      if (entry.learned) learned.push(id);
+      if (entry.mastery > 0) mastery[id] = entry.mastery;
     }
+    const chestLoot: Record<string, ChestLoot> = {};
+    for (const [id, loot] of this.chestLoot) chestLoot[id] = { bookIds: [...loot.bookIds], pageIds: [...loot.pageIds] };
+    return {
+      learned,
+      mastery,
+      defeatedWitchIds: [...this.defeatedWitchIds],
+      openedGateIds: [...this.openedGateIds],
+      openedChestIds: [...this.openedChestIds],
+      bookPageIds: [...this.collectedBookPageIds],
+      bookIds: [...this.collectedBookIds],
+      chestLoot,
+    };
+  }
+
+  /**
+   * Заменяет прогресс данными из снимка. Снимок мог быть записан другой версией игры, поэтому
+   * неизвестные заклинания, книги и страницы отбрасываются (иначе UI споткнётся о id без записи
+   * в справочнике), а мастерство ограничивается 0…MAX_MASTERY и только у изученных.
+   * Стартовые заклинания изучены всегда.
+   */
+  public restore(snapshot: GameStateSnapshot, options: RestoreOptions = {}): void {
+    const withWorld = options.world !== false;
+    this.resetProgress();
+    for (const id of snapshot.learned) {
+      const entry = this.progress.get(id);
+      if (entry) entry.learned = true;
+    }
+    for (const [id, value] of Object.entries(snapshot.mastery)) {
+      const entry = this.progress.get(id);
+      if (entry?.learned && Number.isFinite(value)) entry.mastery = Math.max(0, Math.min(MAX_MASTERY, Math.round(value)));
+    }
+
+    const knownBooks = (ids: string[]): string[] => ids.filter((id) => getBookById(id) !== undefined);
+    const knownPages = (ids: string[]): string[] => ids.filter((id) => getBookPageById(id) !== undefined);
+    this.collectedBookIds = new Set(knownBooks(snapshot.bookIds));
+    this.collectedBookPageIds = new Set(knownPages(snapshot.bookPageIds));
+
+    this.defeatedWitchIds = new Set(withWorld ? snapshot.defeatedWitchIds : []);
+    this.openedGateIds = new Set(withWorld ? snapshot.openedGateIds : []);
+    this.openedChestIds = new Set(withWorld ? snapshot.openedChestIds : []);
+    this.chestLoot = new Map();
+    if (withWorld) {
+      for (const [id, loot] of Object.entries(snapshot.chestLoot)) {
+        this.chestLoot.set(id, { bookIds: knownBooks(loot.bookIds), pageIds: knownPages(loot.pageIds) });
+      }
+    }
+    this.notify();
   }
 
   // ---------- Школы (ветки) ----------

@@ -10,8 +10,10 @@ import { button } from "./widgets";
 export interface PauseMenuDeps {
   gameState: GameState;
   settings: SettingsStore;
-  /** «Выйти»: подтверждено в диалоге. В браузере — перезапуск страницы (новый забег). */
-  onExit: () => void;
+  /** «Новая игра»: подтверждено в диалоге. Вызывающий стирает сохранение и перезапускает игру. */
+  onNewGame: () => void;
+  /** Сохраняется ли прогресс (false — хранилище недоступно; меню честно об этом пишет). */
+  canSave: () => boolean;
   /** Относится ли клавиша к действию «пауза» (по настройкам игрока). */
   isPauseKey: (e: KeyboardEvent) => boolean;
   isTouch: () => boolean;
@@ -24,20 +26,23 @@ export interface PauseMenuDeps {
   onClose?: () => void;
 }
 
-type View = "inventory" | "settings" | "confirm-exit";
+type View = "inventory" | "settings" | "new-game";
 
 const MENU: ReadonlyArray<{ view: View | "resume"; icon: string; label: string; cls: string }> = [
   { view: "resume", icon: "▶", label: "Продолжить", cls: "is-primary" },
   { view: "inventory", icon: "🎒", label: "Инвентарь", cls: "" },
   { view: "settings", icon: "⚙", label: "Настройки", cls: "" },
-  { view: "confirm-exit", icon: "⏻", label: "Выйти", cls: "is-danger" },
+  { view: "new-game", icon: "↻", label: "Новая игра", cls: "is-danger" },
 ];
 
 /**
- * Меню паузы: слева — «Продолжить / Инвентарь / Настройки / Выйти», справа —
+ * Меню паузы: слева — «Продолжить / Инвентарь / Настройки / Новая игра», справа —
  * содержимое выбранного раздела (по умолчанию — инвентарь с деревом изученных
  * заклинаний). Пока меню открыто, игра стоит (см. Game.startRenderLoop), а любые
  * клавиши, кроме управления самим меню, до игры не доходят.
+ *
+ * Прогресс сохраняется автоматически (см. AutoSave), поэтому «выхода» нет — перезагрузка
+ * страницы просто продолжила бы игру; вместо него «Новая игра» с подтверждением.
  *
  * Esc — «назад»: из настроек и подтверждения возвращает в инвентарь, из
  * инвентаря — продолжает игру. Клавиша паузы по настройкам игрока (например P)
@@ -114,12 +119,13 @@ export class PauseMenu {
     // До игры клавиши не доходят, пока открыто меню (keyup пропускаем — отпускание клавиши игра должна увидеть).
     e.stopPropagation();
 
-    if (e.code === "Escape") {
+    const isEsc = e.code === "Escape";
+    if (isEsc || this.deps.isPauseKey(e)) {
       e.preventDefault();
-      this.back();
-    } else if (this.deps.isPauseKey(e)) {
-      e.preventDefault();
-      this.close();
+      // Автоповтор зажатой клавиши (той, которой открыли паузу) не должен сразу откатывать/закрывать меню.
+      if (e.repeat) return;
+      if (isEsc) this.back();
+      else this.close();
     } else if (e.code === "ArrowDown" || e.code === "ArrowUp") {
       const buttons = this.menuButtons();
       const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -168,6 +174,15 @@ export class PauseMenu {
       if (active) b.setAttribute("aria-current", "page");
       menu.appendChild(b);
     }
+
+    const canSave = this.deps.canSave();
+    menu.appendChild(
+      el(
+        "p",
+        canSave ? "pause-save-note" : "pause-save-note is-warning",
+        canSave ? "💾 Прогресс сохраняется автоматически" : "⚠ Браузер не даёт сохранять — прогресс пропадёт при закрытии вкладки",
+      ),
+    );
   }
 
   private renderContent(): void {
@@ -186,25 +201,31 @@ export class PauseMenu {
       });
       content.appendChild(this.settingsPane.element);
     } else {
-      content.appendChild(this.confirmExit());
+      content.appendChild(this.confirmNewGame());
     }
   }
 
-  private confirmExit(): HTMLElement {
+  private confirmNewGame(): HTMLElement {
     const box = el("div", "pause-confirm");
     box.setAttribute("role", "alertdialog");
-    box.setAttribute("aria-label", "Подтверждение выхода");
-    box.appendChild(el("h3", "pause-title", "Выйти из игры?"));
-    box.appendChild(el("p", "pause-confirm-text", "Прогресс текущего забега не сохраняется: найденные книги, страницы и изученные заклинания будут потеряны."));
+    box.setAttribute("aria-label", "Подтверждение новой игры");
+    box.appendChild(el("h3", "pause-title", "Начать новую игру?"));
+    box.appendChild(
+      el(
+        "p",
+        "pause-confirm-text",
+        "Весь сохранённый прогресс будет стёрт: найденные книги и страницы, изученные заклинания, побеждённые ведьмы и открытые сундуки. Мир создастся заново.",
+      ),
+    );
     const row = el("div", "pause-confirm-row");
     const stay = button("Остаться", "pause-btn is-primary", () => this.show("inventory"));
     stay.dataset.act = "stay";
-    const leave = button("Выйти", "pause-btn is-danger", () => {
+    const startOver = button("Начать заново", "pause-btn is-danger", () => {
       this.close();
-      this.deps.onExit();
+      this.deps.onNewGame();
     });
-    leave.dataset.act = "leave";
-    row.append(stay, leave);
+    startOver.dataset.act = "start-over";
+    row.append(stay, startOver);
     box.appendChild(row);
     // Безопасный выбор по умолчанию — «Остаться».
     queueMicrotask(() => stay.focus());

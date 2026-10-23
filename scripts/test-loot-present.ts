@@ -364,6 +364,29 @@ const q = QUALITY_PROFILES.low;
   check(r2.arrived.length === items.length && new Set(r2.arrived).size === items.length, "skipAll на паузе: без дублей");
   p2.dispose();
 
+  // Esc, которым пропускают находки, не должен долетать до слушателей игры (иначе он тут же откроет паузу).
+  // Игровые слушатели висят на window в фазе всплытия, презентер — в фазе перехвата.
+  {
+    let leaked = 0;
+    const probe = (): void => void leaked++;
+    win.addEventListener("keydown", probe);
+    const p4 = new LootPresenter(freshRoot(), { quality: q, reducedMotion: false });
+    p4.present(items, makeRoute().route);
+    runUntil(p4, () => false, 0.5);
+    win.document.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }) as unknown as Event);
+    check(!p4.isActive, "Esc (событие от элемента) пропускает показ");
+    check(leaked === 0, "Esc гасится презентером: до слушателей игры (пауза) не долетает");
+
+    const p5 = new LootPresenter(freshRoot(), { quality: q, reducedMotion: false });
+    p5.present(items, makeRoute().route);
+    runUntil(p5, () => false, 0.5);
+    win.document.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "KeyP", code: "KeyP", bubbles: true, cancelable: true }) as unknown as Event);
+    check(leaked === 1, "остальные клавиши презентер не гасит (ускоряет и пропускает дальше)");
+    p5.dispose();
+    p4.dispose();
+    win.removeEventListener("keydown", probe);
+  }
+
   // dispose посреди показа: ничего не вызывается и не течёт.
   const p3 = new LootPresenter(freshRoot(), { quality: q, reducedMotion: false });
   const r3 = makeRoute();

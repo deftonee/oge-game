@@ -21,13 +21,9 @@ export function captureNextKey(target: KeyCaptureTarget, onKey: (code: string | 
     target.removeEventListener("keydown", handler, true);
   };
   const handler = (e: KeyboardEvent): void => {
-    if (e.repeat) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      return;
-    }
     e.preventDefault();
     e.stopImmediatePropagation();
+    if (e.repeat) return;
     finish();
     onKey(e.code === "Escape" || !e.code ? null : e.code);
   };

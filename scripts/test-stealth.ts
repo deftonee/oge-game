@@ -293,17 +293,21 @@ console.log = () => {}; // глушим [stream]/[world-gen]
   }
 
   // C2. Без стены погоня идёт к игроку, медленно (после паузы узнавания).
+  // Начальный курс ведьмы случаен (так и задумано), поэтому игрока ставим один раз — в конусе её
+  // стартового взгляда — и дальше он стоит НА МЕСТЕ. Если же каждый кадр ставить его «перед глазами»
+  // (по текущему курсу), цель вращается вместе с ведьмой и случайное «вилянье» замыкает её в петлю:
+  // так тест падал примерно в 2–3 % запусков, хотя с ведьмой всё в порядке.
   {
     const witch = new Witch(scene, new Vector3(0, 0, -20), spell, "c2", false);
     const start = witch.position.clone();
+    const startYaw = witch.facingYaw;
+    const px = start.x + Math.sin(startYaw) * 7;
+    const pz = start.z + Math.cos(startYaw) * 7;
     let maxStep = 0;
     let prev = witch.position.clone();
     let chased = false;
     let noticed = false;
     for (let i = 0; i < 60 * 8; i++) {
-      const yaw = witch.facingYaw;
-      const px = witch.position.x + Math.sin(yaw) * 7;
-      const pz = witch.position.z + Math.cos(yaw) * 7;
       witch.updateAi(1 / 60, { playerX: px, playerZ: pz, playerHidden: false, paused: false, lineOfSight: () => true });
       if (witch.aiState === "notice") noticed = true;
       if (witch.aiState === "chase") chased = true;
@@ -374,9 +378,24 @@ console.log = () => {}; // глушим [stream]/[world-gen]
     check(chaser.aiState === "chase", "в своей секции ведьма гонится");
     for (let i = 0; i < 10; i++) chaser.updateAi(1 / 60, ctxFor(false));
     check(chaser.aiState === "watch", `игрок ушёл в другую секцию — ведьма стоит и смотрит (сейчас ${chaser.aiState})`);
-    const stay = chaser.position.clone();
-    for (let i = 0; i < 60 * 3; i++) chaser.updateAi(1 / 60, ctxFor(false));
-    check(Vector3.Distance(stay, chaser.position) < 1e-6 && chaser.aiState === "watch", "в наблюдении ведьма не двигается, пока игрока видно");
+    // Наблюдение «не вечное»: длится watchMin × терпение, а терпение у каждой ведьмы своё (случайное),
+    // то есть не меньше ~2,4 с. Поэтому жёстко проверяем только эти первые 2 с; дальше — пока она ещё в
+    // наблюдении, она стоит, а когда интерес угас (возврат домой) — двигаться уже можно.
+    let watchFrames = 0; // кадров подряд с начала проверки, что она в наблюдении
+    let stillWatching = true;
+    let walkedWhileWatching = false;
+    for (let i = 0; i < 60 * 12; i++) {
+      const before = chaser.position.clone();
+      chaser.updateAi(1 / 60, ctxFor(false));
+      if (chaser.aiState === "watch") {
+        if (Vector3.Distance(before, chaser.position) > 1e-6) walkedWhileWatching = true;
+        if (stillWatching) watchFrames++;
+      } else {
+        stillWatching = false;
+      }
+    }
+    check(watchFrames >= 60 * 2, `ведьма наблюдает не меньше 2 с, пока игрока видно (${(watchFrames / 60).toFixed(2)} с)`);
+    check(!walkedWhileWatching, "в наблюдении ведьма не двигается");
     chaser.dispose();
   }
 

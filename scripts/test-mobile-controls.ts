@@ -165,6 +165,29 @@ import { MobileControls } from "../src/mobile/MobileControls";
   check("force: стик мышью даёт x=1", Math.abs(v.x - 1) < 1e-9 && v.y === 0, `x=${v.x}, y=${v.y}`);
 }
 
+// ---------- 4. Кнопка паузы: только если передан onPause ----------
+{
+  const { win, args } = setupDom();
+  setCoarsePrimary(win, true);
+  const without = new MobileControls(args());
+  check("пауза: без onPause кнопки нет (старые вызовы работают)", without.isActive && win.document.querySelector(".mobile-btn.pause") === null);
+}
+{
+  const { win, counters, args } = setupDom();
+  setCoarsePrimary(win, true);
+  let paused = 0;
+  const controls = new MobileControls({ ...args(), onPause: () => void (paused += 1) });
+  const btn = win.document.querySelector(".mobile-btn.pause") as unknown as HTMLElement | null;
+  check("пауза: с onPause кнопка создана", btn !== null);
+  check("пауза: у кнопки есть подпись для скринридера", !!btn?.getAttribute("aria-label"));
+  btn?.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true, cancelable: true }) as unknown as Event);
+  check("пауза: pointerdown вызывает onPause", paused === 1);
+  check("пауза: остальные кнопки не задеты", counters.interact === 0 && counters.graph === 0);
+  const root = win.document.querySelector(".mobile-controls") as unknown as HTMLElement;
+  controls.setVisible(false);
+  check("пауза: прячется вместе с остальными контролами", root.style.display === "none");
+}
+
 console.log("");
 if (FAILURES.length > 0) {
   console.error(`FAILED: ${FAILURES.length}`);

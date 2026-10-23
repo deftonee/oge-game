@@ -157,6 +157,20 @@ const allCodes = (b: Bindings): string[] => ACTIONS.flatMap((a) => b[a]).filter(
   check(RESERVED_CODES.includes("Backquote") && !assignKey(base, "interact", 0, "Backquote").ok, "Backquote (отладчик) зарезервирован");
   check(assignKey(base, "pause", 0, "Escape").ok, "у «паузы» Esc остаётся законной привязкой");
 
+  // Ловушка: заменили Esc у паузы — вернуть его обратно должно быть можно (не только сбросом всего управления).
+  const swapped = assignKey(base, "pause", 0, "KeyU");
+  check(swapped.ok && swapped.bindings.pause[0] === "KeyU" && !swapped.bindings.pause.includes("Escape"), "Esc заменён у паузы на U");
+  if (swapped.ok) {
+    const back0 = assignKey(swapped.bindings, "pause", 0, "Escape");
+    check(back0.ok && back0.bindings.pause[0] === "Escape", "Esc можно вернуть паузе в основной слот");
+    const back1 = assignKey(swapped.bindings, "pause", 1, "Escape");
+    check(back1.ok && JSON.stringify(back1.bindings.pause) === JSON.stringify(["KeyU", "Escape"]), "Esc можно вернуть паузе и в запасной слот");
+    const stillReserved = assignKey(swapped.bindings, "interact", 0, "Escape");
+    check(!stillReserved.ok && stillReserved.reason === "reserved", "другим действиям Esc по-прежнему нельзя");
+    const backquote = assignKey(swapped.bindings, "pause", 1, "Backquote");
+    check(!backquote.ok && backquote.reason === "reserved", "Backquote (отладчик) нельзя и паузе");
+  }
+
   // Забрать клавишу у действия, у которого есть другая: хозяин теряет её, но сохраняет вторую.
   const steal = assignKey(base, "interact", 0, "ArrowUp");
   check(steal.ok && steal.bindings.interact[0] === "ArrowUp" && steal.bindings.moveForward[0] === "KeyW" && steal.bindings.moveForward[1] === null, "клавиша забирается у действия с запасной клавишей");

@@ -1471,3 +1471,587 @@ body.emulate-mobile [class$="-panel"] {
   border-radius: 999px;
   pointer-events: none;
 }
+
+/* ===== Меню паузы и настройки ========================================= */
+/* Меню лежит поверх замершей сцены (см. Game.startRenderLoop), поэтому всё дёшево:
+   без backdrop-filter и больших теней, анимируются только transform/opacity.
+   Раскладка — слева разделы, справа содержимое; на узком экране разделы уходят наверх.
+   Касания: кнопки не ниже 44px, touch-action: manipulation (без задержки двойного тапа). */
+
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30; /* выше графа (20) и презентации находок (25) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  background: rgba(6, 7, 14, 0.88);
+  animation: fadeIn 0.18s ease;
+}
+
+.pause-panel {
+  width: min(960px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 2px solid var(--panel-edge);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.pause-heading {
+  margin: 0;
+  padding: 16px 22px 12px;
+  font-size: 19px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+.pause-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.pause-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 210px;
+  padding: 16px;
+  border-right: 1px solid var(--panel-edge);
+}
+
+.pause-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 20px 20px;
+}
+
+/* ---------- Кнопки ---------- */
+
+.pause-btn {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--chalk);
+  min-height: 46px;
+  padding: 10px 14px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid var(--panel-edge);
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.08s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.pause-btn:hover {
+  border-color: var(--chalk-dim);
+}
+
+.pause-btn:active {
+  transform: scale(0.97);
+}
+
+.pause-btn:focus-visible,
+.pause-seg:focus-visible,
+.pause-tab:focus-visible,
+.pause-key:focus-visible,
+.pause-key-clear:focus-visible {
+  outline: 2px solid var(--spell);
+  outline-offset: 2px;
+}
+
+.pause-btn.is-current {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--chalk-dim);
+}
+
+.pause-btn.is-primary {
+  border-color: var(--spell);
+  background: rgba(79, 214, 200, 0.14);
+}
+
+.pause-btn.is-danger {
+  border-color: var(--danger);
+  color: #ffb4ad;
+  background: rgba(255, 107, 94, 0.1);
+}
+
+.pause-btn-small {
+  align-self: flex-start;
+  min-height: 44px;
+  margin-top: 14px;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Строка про автосохранение внизу списка разделов */
+.pause-save-note {
+  margin: auto 0 0;
+  padding-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--chalk-dim);
+}
+
+.pause-save-note.is-warning {
+  color: var(--gold);
+}
+
+/* ---------- Заголовки, вкладки ---------- */
+
+.pause-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.pause-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+.pause-tab {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 44px;
+  margin-bottom: -1px;
+  padding: 8px 16px;
+  color: var(--chalk-dim);
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pause-tab.is-active {
+  color: var(--chalk);
+  border-bottom-color: var(--spell);
+}
+
+.pause-tabpanel {
+  display: flex;
+  flex-direction: column;
+}
+
+.pause-message {
+  min-height: 1.4em;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--gold);
+}
+
+/* ---------- Строки настроек ---------- */
+
+.pause-row {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pause-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.pause-row-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pause-row-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--chalk-dim);
+}
+
+.pause-row-note {
+  font-size: 13px;
+  color: var(--chalk-dim);
+}
+
+/* ---------- Переключатель «один из N» ---------- */
+
+.pause-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pause-seg {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 56px;
+  min-height: 44px;
+  padding: 8px 14px;
+  color: var(--chalk-dim);
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid var(--panel-edge);
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pause-seg.is-active {
+  color: var(--chalk);
+  border-color: var(--spell);
+  background: rgba(79, 214, 200, 0.16);
+}
+
+/* ---------- Выключатель ---------- */
+
+.pause-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Настоящий чекбокс остаётся в DOM (фокус, клавиатура, скринридеры) — только невидим. */
+.pause-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+
+.pause-toggle-box {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--panel-edge);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.pause-toggle-box::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--chalk-dim);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.pause-toggle input:checked + .pause-toggle-box {
+  background: rgba(79, 214, 200, 0.25);
+  border-color: var(--spell);
+}
+
+.pause-toggle input:checked + .pause-toggle-box::after {
+  transform: translateX(20px);
+  background: var(--spell);
+}
+
+.pause-toggle input:focus-visible + .pause-toggle-box {
+  outline: 2px solid var(--spell);
+  outline-offset: 2px;
+}
+
+.pause-toggle-label {
+  font-size: 14px;
+}
+
+/* ---------- Ползунок ---------- */
+
+.pause-slider {
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pause-slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--spell);
+  touch-action: pan-y; /* горизонтальное движение — ползунку, вертикальное — прокрутке меню */
+}
+
+.pause-slider-value {
+  min-width: 52px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--chalk-dim);
+}
+
+/* ---------- Таблица клавиш ---------- */
+
+.pause-keys {
+  padding-top: 8px;
+}
+
+.pause-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.pause-key-label {
+  font-size: 14px;
+}
+
+.pause-key-slots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pause-key {
+  min-width: 78px;
+  min-height: 40px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--chalk);
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid var(--panel-edge);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.pause-key.is-empty {
+  color: var(--chalk-dim);
+  border-style: dashed;
+}
+
+.pause-key.is-waiting {
+  color: var(--spell);
+  border-color: var(--spell);
+  background: rgba(79, 214, 200, 0.12);
+}
+
+.pause-key-clear {
+  width: 36px;
+  min-height: 40px;
+  font-size: 13px;
+  color: var(--chalk-dim);
+  background: none;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.pause-key-clear:hover {
+  color: var(--chalk);
+  border-color: var(--chalk-dim);
+}
+
+/* ---------- Подтверждение выхода ---------- */
+
+.pause-confirm {
+  max-width: 420px;
+}
+
+.pause-confirm-text {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--chalk-dim);
+}
+
+.pause-confirm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pause-confirm-row .pause-btn {
+  flex: 1 1 140px;
+  text-align: center;
+}
+
+/* ---------- Инвентарь ---------- */
+
+.pause-materials {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.pause-chip {
+  padding: 10px 12px;
+  border: 2px solid var(--panel-edge);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  opacity: 0.6;
+}
+
+.pause-chip.is-have {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pause-chip-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pause-chip-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--chalk-dim);
+}
+
+/* Пустое дерево заклинаний (режим «learned» без изученного) */
+.graph-empty {
+  padding: 18px 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--chalk-dim);
+}
+
+/* ---------- Узкий экран: разделы — сеткой сверху, содержимое — под ними ---------- */
+
+@media (max-width: 720px) {
+  .pause-body {
+    flex-direction: column;
+  }
+
+  .pause-menu {
+    flex: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+
+  .pause-menu .pause-btn {
+    flex: 1 1 calc(50% - 4px);
+    min-height: 44px;
+    padding: 8px 10px;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  .pause-menu .pause-save-note {
+    flex: 1 1 100%;
+    margin: 2px 0 0;
+    padding-top: 0;
+    text-align: center;
+  }
+
+  .pause-content {
+    padding: 12px 14px 16px;
+  }
+
+  .pause-segmented {
+    justify-content: flex-start;
+  }
+}
+
+/* Dev-эмуляция телефона (?mobile=1) на широком мониторе: медиа-запрос смотрит на монитор,
+   а не на рамку 9:16, поэтому узкую раскладку включаем по классу. */
+body.emulate-mobile .pause-body {
+  flex-direction: column;
+}
+
+body.emulate-mobile .pause-menu {
+  flex: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-right: none;
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+body.emulate-mobile .pause-menu .pause-btn {
+  flex: 1 1 calc(50% - 4px);
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 14px;
+  text-align: center;
+}
+
+body.emulate-mobile .pause-menu .pause-save-note {
+  flex: 1 1 100%;
+  margin: 2px 0 0;
+  padding-top: 0;
+  text-align: center;
+}
+
+body.emulate-mobile .pause-content {
+  padding: 12px 14px 16px;
+}
+
+body.emulate-mobile .pause-segmented {
+  justify-content: flex-start;
+}
+
+/* Телефон «на боку»: высоты мало — ужимаем отступы и кнопки, чтобы раздел влезал без прокрутки. */
+@media (max-height: 520px) {
+  .pause-heading {
+    padding: 8px 18px 6px;
+    font-size: 16px;
+  }
+
+  .pause-menu {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+
+  .pause-btn {
+    min-height: 44px;
+    padding: 6px 12px;
+  }
+
+  .pause-content {
+    padding: 10px 16px 14px;
+  }
+
+  .pause-row {
+    padding: 8px 0;
+  }
+}
+
+/* ---------- Кнопка паузы на экране (мобильные контролы) ---------- */
+
+.mobile-btn.pause {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  width: 48px;
+  height: 48px;
+  font-size: 18px;
+}

@@ -28,12 +28,14 @@
     "test:settings": "esbuild scripts/test-settings.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-settings.cjs && node .tmp/test-settings.cjs",
     "test:keybindings": "esbuild scripts/test-keybindings.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-keybindings.cjs && node .tmp/test-keybindings.cjs",
     "test:apply-settings": "esbuild scripts/test-apply-settings.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-apply-settings.cjs && node .tmp/test-apply-settings.cjs",
+    "test:pause": "esbuild scripts/test-pause.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-pause.cjs && node .tmp/test-pause.cjs",
+    "test:save": "esbuild scripts/test-save.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-save.cjs && node .tmp/test-save.cjs",
     "test:graph-view": "esbuild scripts/test-graph-view.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-graph-view.cjs && node .tmp/test-graph-view.cjs",
     "test:world": "npm run test:world-gen && npm run test:world-footprint && npm run test:chunk-collisions && npm run test:streaming-window && npm run test:world-extend && npm run test:world-streamer",
     "test:witch-ai": "esbuild scripts/test-witch-ai.ts --bundle --platform=node --format=cjs --outfile=.tmp/test-witch-ai.cjs && node .tmp/test-witch-ai.cjs",
     "test:stealth": "esbuild scripts/test-stealth.ts --bundle --platform=node --format=cjs --external:@babylonjs/core --outfile=.tmp/test-stealth.cjs && node .tmp/test-stealth.cjs",
     "test:world:full": "npm run test:world-gen -- --full && npm run test:world-footprint -- --full && npm run test:chunk-collisions -- --full && npm run test:streaming-window -- --full && npm run test:world-extend -- --full && npm run test:world-streamer -- --full",
-    "test:fast": "npm run test:witch-ai && npm run test:stealth && npm run test:section-content && npm run test:witch-figure && npm run test:chest && npm run test:spells && npm run test:loot && npm run test:loot-ui && npm run test:mobile && npm run test:quality && npm run test:grass && npm run test:foliage && npm run test:backpack && npm run test:loot-present && npm run test:settings && npm run test:keybindings && npm run test:apply-settings && npm run test:graph-view",
+    "test:fast": "npm run test:witch-ai && npm run test:stealth && npm run test:section-content && npm run test:witch-figure && npm run test:chest && npm run test:spells && npm run test:loot && npm run test:loot-ui && npm run test:mobile && npm run test:quality && npm run test:grass && npm run test:foliage && npm run test:backpack && npm run test:loot-present && npm run test:settings && npm run test:keybindings && npm run test:apply-settings && npm run test:graph-view && npm run test:pause && npm run test:save",
     "test": "npm run test:fast && npm run test:world"
   },
   "dependencies": {

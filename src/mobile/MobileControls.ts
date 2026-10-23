@@ -2,7 +2,8 @@
  * Мобильное управление поверх канваса:
  * - слева — виртуальный стик (зона касания = левая часть экрана; база появляется
  *   в точке касания, вектор нормирован: y=+1 вперёд/вверх, x=+1 вправо);
- * - справа — круглая кнопка «взаимодействие» (аналог E) и кнопка графа заклинаний (G).
+ * - справа — круглая кнопка «взаимодействие» (аналог E) и кнопка графа заклинаний (G);
+ * - в правом верхнем углу — кнопка паузы (аналог Esc/P), если передан onPause.
  *
  * Монтируется лениво при первом touchstart — на десктопе ничего не создаётся.
  * Pointer Events + setPointerCapture: палец можно таскать за пределы зоны, стик не теряется.
@@ -12,6 +13,8 @@ export interface MobileControlsOptions {
   onInteract: () => void;
   /** Аналог клавиши G — открыть граф заклинаний. */
   onSpellGraph: () => void;
+  /** Аналог Esc/P — открыть паузу. Без него кнопки паузы нет (и старые вызовы продолжают работать). */
+  onPause?: () => void;
   /** Принудительно включить управление сразу (эмуляция мобильного на десктопе, ?mobile=1). */
   force?: boolean;
 }
@@ -21,9 +24,7 @@ const STICK_DEADZONE = 0.14; // нормированный мёртвый ход
 
 export class MobileControls {
   private controlsRoot: HTMLElement | null = null;
-  private joyZone: HTMLElement | null = null;
   private joyBase: HTMLElement | null = null;
-  private joyKnob: HTMLElement | null = null;
 
   private mounted = false;
   private visible = true;
@@ -104,16 +105,26 @@ export class MobileControls {
 
     btnRight.append(graph, interact);
     root.append(zone, btnRight);
+
+    // --- Пауза: отдельно, в правом верхнем углу (далеко от стика и от кнопок действий) ---
+    let pauseBtn: HTMLButtonElement | null = null;
+    if (this.opts.onPause) {
+      pauseBtn = document.createElement("button");
+      pauseBtn.type = "button";
+      pauseBtn.className = "mobile-btn pause";
+      pauseBtn.setAttribute("aria-label", "Пауза и меню");
+      pauseBtn.textContent = "⏸";
+      root.appendChild(pauseBtn);
+    }
     document.body.appendChild(root);
 
     this.controlsRoot = root;
-    this.joyZone = zone;
     this.joyBase = base;
-    this.joyKnob = knob;
 
     this.wireJoystick(zone, base, knob);
     this.wireButton(interact, this.opts.onInteract);
     this.wireButton(graph, this.opts.onSpellGraph);
+    if (pauseBtn && this.opts.onPause) this.wireButton(pauseBtn, this.opts.onPause);
   }
 
   private wireJoystick(zone: HTMLElement, base: HTMLElement, knob: HTMLElement): void {

@@ -180,8 +180,14 @@ export class LootPresenter {
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (e.repeat) return; // удержание клавиши E, которой открыли сундук, не должно пролистывать показ
-    if (e.key === "Escape") this.skipAll();
-    else this.accelerate();
+    if (e.key === "Escape") {
+      // Esc, которым пропускают находки, не должен тут же открыть паузу: её слушатель висит
+      // на window в фазе всплытия — гасим событие здесь (мы в фазе перехвата).
+      e.stopPropagation();
+      this.skipAll();
+    } else {
+      this.accelerate();
+    }
   };
 
   private readonly onResize = (): void => {

@@ -64,15 +64,6 @@ export class SettingsPane {
     this.stopCapture();
   }
 
-  /** Esc: отменяет ожидание клавиши. true — было что отменять. */
-  public cancelPendingCapture(): boolean {
-    if (!this.capturing) return false;
-    this.stopCapture();
-    this.message = "";
-    this.render();
-    return true;
-  }
-
   // -------------------------------------------------------------------------
 
   private stopCapture(): void {
@@ -252,7 +243,7 @@ export class SettingsPane {
       row.appendChild(slots);
       table.appendChild(row);
     }
-    table.appendChild(el("div", "pause-row-hint", this.capturing ? "Esc — отмена." : "Нажми на клавишу, чтобы переназначить. Esc всегда закрывает меню."));
+    table.appendChild(el("div", "pause-row-hint", this.capturing ? "Esc — отмена." : "Нажми на клавишу, чтобы переназначить. Esc — «назад» в меню, его можно оставить только для паузы."));
     return table;
   }
 

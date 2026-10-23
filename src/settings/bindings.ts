@@ -32,11 +32,13 @@ export function findBinding(b: Bindings, code: string): { action: ActionId; slot
 }
 
 /**
- * Назначает клавишу в слот действия. Esc и служебные клавиши отклоняются, но у
- * действия «pause» Esc уже стоит по умолчанию — это отдельная привязка, а не переназначение.
+ * Назначает клавишу в слот действия. Зарезервированные клавиши отклоняются, кроме Esc для
+ * действия «pause»: он стоит у паузы по умолчанию, и если игрок его заменил, вернуть Esc обратно
+ * должно быть можно (иначе единственный путь назад — «Сбросить управление»).
  */
 export function assignKey(bindings: Bindings, action: ActionId, slot: 0 | 1, code: string): AssignResult {
-  if (RESERVED_CODES.includes(code) && bindings[action][slot] !== code) return { ok: false, reason: "reserved" };
+  const escapeForPause = action === "pause" && code === "Escape";
+  if (RESERVED_CODES.includes(code) && !escapeForPause && bindings[action][slot] !== code) return { ok: false, reason: "reserved" };
 
   const next = clone(bindings);
   const displaced: KeySlot = next[action][slot];

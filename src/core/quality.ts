@@ -105,6 +105,15 @@ export function pickTier(probe: QualityProbe): QualityTier {
   return "mid";
 }
 
+/**
+ * Уровень из адреса (?quality=low|mid|high). Пустое значение и мусор не считаются выбором:
+ * иначе `?quality=` или опечатка молча перебивали бы сохранённую настройку игрока.
+ */
+export function qualityFromUrl(search: string = typeof window !== "undefined" ? (window.location?.search ?? "") : ""): QualityTier | null {
+  const value = new URLSearchParams(search).get("quality");
+  return isTier(value) ? value : null;
+}
+
 /** Снимает данные об устройстве из браузера; вне браузера (тесты на Node) возвращает пустой зонд. */
 export function readProbe(): QualityProbe {
   const probe: QualityProbe = {};
@@ -115,7 +124,7 @@ export function readProbe(): QualityProbe {
   }
   if (typeof window !== "undefined") {
     probe.coarsePointer = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
-    probe.override = new URLSearchParams(window.location?.search ?? "").get("quality") ?? storedOverride();
+    probe.override = qualityFromUrl() ?? storedOverride();
   }
   return probe;
 }

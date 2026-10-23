@@ -1,6 +1,8 @@
 // Профиль качества: выбор уровня по характеристикам устройства и согласованность
 // профилей (слабее уровень — не тяжелее сильного).
-import { QUALITY_PROFILES, getQuality, pickTier, setQualityTier } from "../src/core/quality";
+import { QUALITY_PROFILES, getQuality, pickTier, qualityFromUrl, readProbe, setQualityTier } from "../src/core/quality";
+import { defaultSettings } from "../src/settings/settings";
+import { SETTINGS_KEY } from "../src/settings/settingsStorage";
 import type { QualityProfile } from "../src/core/quality";
 
 declare const process: { exit(code?: number): never };
@@ -28,6 +30,33 @@ check(pickTier({ cores: 8, coarsePointer: true }) === "mid", "8 ядер, но �
 check(pickTier({ cores: 8, memoryGb: 8, coarsePointer: false }) === "high", "мощный ПК — «high»");
 check(pickTier({ cores: 16, memoryGb: 4, coarsePointer: false }) === "mid", "мало памяти — не «high»");
 check(pickTier({ cores: 12, coarsePointer: false }) === "high", "память неизвестна — не мешает «high»");
+
+// --- уровень из адреса -------------------------------------------------------
+check(qualityFromUrl("?quality=low") === "low" && qualityFromUrl("?a=1&quality=high") === "high", "?quality=low|mid|high читается");
+check(qualityFromUrl("") === null && qualityFromUrl("?x=1") === null, "без параметра — null");
+check(qualityFromUrl("?quality=") === null, "пустое ?quality= — не выбор");
+check(qualityFromUrl("?quality=ultra") === null && qualityFromUrl("?quality=LOW") === null, "мусор и неверный регистр — не выбор");
+
+// Настройка игрока не должна пропадать из-за мусора в адресе (раньше «?quality=опечатка» перебивала её).
+const g = globalThis as unknown as Record<string, unknown>;
+function probeWith(search: string, storedQuality: string): string | null | undefined {
+  const stored = { ...defaultSettings(), graphics: { ...defaultSettings().graphics, quality: storedQuality } };
+  g.window = {
+    location: { search },
+    matchMedia: () => ({ matches: false }),
+    localStorage: { getItem: (k: string) => (k === SETTINGS_KEY ? JSON.stringify(stored) : null), setItem: () => {} },
+  };
+  try {
+    return readProbe().override;
+  } finally {
+    delete g.window;
+  }
+}
+check(probeWith("", "low") === "low", "адреса нет → берётся настройка игрока");
+check(probeWith("?quality=ultra", "low") === "low", "мусор в адресе → настройка игрока не теряется");
+check(probeWith("?quality=", "low") === "low", "пустое значение в адресе → настройка игрока не теряется");
+check(probeWith("?quality=high", "low") === "high", "корректный адрес сильнее настройки");
+check(probeWith("?quality=ultra", "auto") === null, "мусор + «авто» → автоопределение");
 
 // --- профили ----------------------------------------------------------------
 const order: QualityProfile[] = [QUALITY_PROFILES.low, QUALITY_PROFILES.mid, QUALITY_PROFILES.high];
