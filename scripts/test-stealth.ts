@@ -545,7 +545,7 @@ console.log = () => {}; // глушим [stream]/[world-gen]
       combat: { startEncounter: () => out.started++ } as never,
       hud: { setInteractHint() {}, setLockedHint() {} } as never,
       cooldown: new EncounterCooldown(),
-      duelRoundsToWin: () => 3,
+      opponents: { witch: (w: unknown) => w, target: (t: unknown) => t } as never,
       isPlayerHidden: () => opts.hidden,
     });
     detector.update(false);

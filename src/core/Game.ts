@@ -6,7 +6,10 @@ import { createPlayer, createOrbitCamera } from "./playerSetup";
 import { EncounterCooldown } from "./encounterCooldown";
 import { createManagers } from "./managers";
 import { createInteraction } from "./interaction";
-import { duelRoundsFor } from "./duelRules";
+import { witchPowerFor } from "./duelRules";
+import { createOpponentFactory } from "../combat/opponent";
+import { BabylonBattleStage } from "../combat/stage/BabylonBattleStage";
+import { PLAYER_REGEN_PER_SECOND } from "../combat/combatBalance";
 import { ProximityDetector } from "../world/proximity";
 import { GameState } from "./GameState";
 import { MobileControls } from "../mobile/MobileControls";
@@ -56,8 +59,10 @@ export class Game {
   private readonly pause: PauseMenu;
   private readonly autoSave: AutoSave;
   private readonly hud: GameManagers["hud"];
+  private readonly combat: GameManagers["combat"];
+  private readonly battleStage: BabylonBattleStage;
+  private readonly playerPower: GameManagers["playerPower"];
   private readonly anyMenuOpen: () => boolean;
-  private readonly duelRoundsToWin: () => number;
   /** Когда в последний раз рисовали кадр под паузой (0 — рисовать сразу). */
   private lastPausedRender = 0;
   /** Снимают слушатели, повешенные на document/window (см. dispose). */
@@ -95,8 +100,18 @@ export class Game {
     this.backpack = new Backpack(scene, player.backMount);
     this.backpack.syncBooks(gameState.getCollectedBookIds());
 
-    const managers = createManagers(uiRoot, gameState, cooldown);
+    // 3D-сцена боя: анимации ударов по школам и ракурсы камеры. На время боя мышь-камера отключается.
+    this.battleStage = new BabylonBattleStage({
+      scene,
+      camera: this.camera,
+      player,
+      input: { detach: () => this.camera.detachControl(), attach: () => this.camera.attachControl(canvas, true) },
+    });
+
+    const managers = createManagers(uiRoot, gameState, cooldown, this.battleStage);
     this.hud = managers.hud;
+    this.combat = managers.combat;
+    this.playerPower = managers.playerPower;
     this.fps = new FpsCounter(uiRoot);
 
     // Автосохранение: при изменении прогресса, при скрытии/закрытии вкладки, по таймеру и при паузе.
@@ -128,8 +143,8 @@ export class Game {
     const stealth = new StealthManager(scene, player, streamer);
     this.stealth = stealth;
 
-    this.duelRoundsToWin = () =>
-      duelRoundsFor(streamer.sectionAt(player.position.x, player.position.z));
+    // Сила ведьмы зависит от секции, в которой игрок встретил её (первая — тренировочная).
+    const opponents = createOpponentFactory(() => witchPowerFor(streamer.sectionAt(player.position.x, player.position.z)));
 
     const proximity = new ProximityDetector({
       player,
@@ -138,7 +153,7 @@ export class Game {
       combat: managers.combat,
       hud: managers.hud,
       cooldown,
-      duelRoundsToWin: this.duelRoundsToWin,
+      opponents,
       isPlayerHidden: () => stealth.isHidden,
     });
     this.proximity = proximity;
@@ -181,7 +196,7 @@ export class Game {
       keys: this.keys,
       backpack: this.backpack,
       screen: new ScreenProjector(scene, this.camera, engine, () => canvas.getBoundingClientRect()),
-      duelRoundsToWin: this.duelRoundsToWin,
+      opponents,
       emulateMobile,
       pause: this.pause,
     });
@@ -250,7 +265,7 @@ export class Game {
   }
 
   private startRenderLoop(): void {
-    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, backpack, lootPresenter, stealth, hud, pause } = this;
+    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, backpack, lootPresenter, stealth, hud, pause, combat, playerPower, battleStage } = this;
 
     engine.runRenderLoop(() => {
       // Пауза: мир стоит (никаких апдейтов), а сцена перерисовывается редко — только чтобы
@@ -269,6 +284,9 @@ export class Game {
       cooldown.tick(dt);
       this.fps.update(engine.getFps(), dt);
 
+      // Сила игрока восстанавливается сама, пока он не в бою.
+      if (!combat.isActive) playerPower.recover(PLAYER_REGEN_PER_SECOND * dt);
+
       const menuOpen = this.anyMenuOpen();
       player.inputLocked = menuOpen;
 
@@ -286,8 +304,13 @@ export class Game {
       backpack.update(dt);
       lootPresenter.update(dt);
 
-      // Камера мягко следует за игроком.
-      camera.target = Vector3.Lerp(camera.target, player.position, Math.min(1, dt * 8));
+      // Сцена боя: анимации ударов и ракурсы камеры (в простое ничего не считает).
+      battleStage.update(dt);
+
+      // Камера мягко следует за игроком — кроме боя: там ею управляет сцена боя.
+      if (!battleStage.controlsCamera) {
+        camera.target = Vector3.Lerp(camera.target, player.position, Math.min(1, dt * 8));
+      }
 
       // Держим в памяти только текущую секцию и её соседей; туман прячет
       // неотрисованный участок до башни.
@@ -313,6 +336,7 @@ export class Game {
     this.owl.dispose();
     this.backpack.dispose();
     this.lootPresenter.dispose();
+    this.battleStage.dispose();
     this.keys.dispose();
     this.fps.dispose();
   }

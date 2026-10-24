@@ -79,8 +79,8 @@ body {
   transition: width 0.25s ease;
 }
 
-.hud-bar-fill.hp {
-  background: linear-gradient(90deg, #ff6b5e, #ffb020);
+.hud-bar-fill.power {
+  background: linear-gradient(90deg, #7be0ff, #b06fe0);
 }
 
 /* ---------- Bonfire / learning ---------- */
@@ -373,19 +373,105 @@ body {
   border-color: var(--spell);
 }
 
-.combat-score-row {
+/* Постоянная плашка шкал Силы: «Ты» и противник. Живёт весь бой, видна и когда окно спрятано на время удара. */
+.battle-bar {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 92vw);
+  z-index: 16;
   display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin: 6px 0 4px;
-  letter-spacing: 1px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 22, 0.72);
+  border: 1px solid var(--panel-edge);
+  pointer-events: none;
 }
 
-.combat-score.player {
+.battle-bar-line {
+  display: grid;
+  grid-template-columns: minmax(70px, 28%) 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.battle-bar-name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.battle-bar-line.player .battle-bar-name {
   color: var(--spell);
 }
 
-.combat-score.witch {
+.battle-bar-line.opponent .battle-bar-name {
+  color: var(--danger);
+}
+
+.battle-bar-track {
+  height: 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--panel-edge);
+  overflow: hidden;
+}
+
+.battle-bar-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 5px;
+  transition: width 0.35s ease;
+}
+
+.battle-bar-line.player .battle-bar-fill {
+  background: linear-gradient(90deg, #7be0ff, #b06fe0);
+}
+
+.battle-bar-line.opponent .battle-bar-fill {
+  background: linear-gradient(90deg, #ff6b5e, #ffb020);
+}
+
+.battle-bar-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--chalk-dim);
+}
+
+/* Окно боя спрятано, пока на сцене летит заклинание. */
+.combat-overlay--fx {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.combat-note {
+  margin: 2px 0 6px;
+  font-size: 13px;
+  color: var(--gold);
+}
+
+/* Усталость заклинания: насколько оно сейчас бьёт в полную силу. */
+.combat-spell-power {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.combat-spell-power.fresh {
+  color: #7be08a;
+}
+
+.combat-spell-power.tired {
+  color: #ffb020;
+}
+
+.combat-spell-power.spent {
   color: var(--danger);
 }
 

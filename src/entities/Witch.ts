@@ -174,6 +174,21 @@ export class Witch {
     return this.brain.state;
   }
 
+  /** Ведьма враждебна и в этот момент видит игрока (заметила или идёт к нему) — при встрече она бьёт первой. */
+  public get hasSpottedPlayer(): boolean {
+    return !this.friendly && this.brain.hasSpottedPlayer;
+  }
+
+  /**
+   * Развернуться лицом к точке (в бою — к игроку). Курс запоминает и мозг: иначе после боя
+   * ИИ вернул бы ведьму на прежний курс рывком.
+   */
+  public faceToward(x: number, z: number): void {
+    const yaw = Math.atan2(x - this.root.position.x, z - this.root.position.z);
+    this.brain.yaw = yaw;
+    this.root.rotation.y = yaw;
+  }
+
   /** Курс ведьмы (рад, 0 = +Z) — куда направлен её конус обзора. */
   public get facingYaw(): number {
     return this.brain.yaw;

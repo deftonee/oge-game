@@ -322,6 +322,14 @@ export class WitchBrain {
     }
   }
 
+  /**
+   * Ведьма видит игрока ПРЯМО СЕЙЧАС: только что заметила (notice) или идёт к нему (chase).
+   * Потеряла из виду (search/watch) — уже нет. От этого зависит, кто бьёт первым при встрече.
+   */
+  public get hasSpottedPlayer(): boolean {
+    return this.state === "notice" || this.state === "chase";
+  }
+
   /** Куда ведьма идёт искать игрока (для тестов и отладки); null вне поиска. */
   public get searchPoint(): Readonly<{ x: number; z: number }> | null {
     return this.state === "search" ? this.searchAnchor : null;

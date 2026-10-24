@@ -5,6 +5,7 @@ import { EncounterCooldown } from "../core/encounterCooldown";
 import type { GameState } from "../core/GameState";
 import type { WorldStreamer } from "./WorldStreamer";
 import type { CombatManager } from "../combat/CombatManager";
+import type { OpponentFactory } from "../combat/opponent";
 import type { Hud } from "../core/Hud";
 import type { EnergyGate } from "../entities/EnergyGate";
 import type { Bonfire } from "../entities/Bonfire";
@@ -27,7 +28,8 @@ export interface ProximityDeps {
   combat: CombatManager;
   hud: Hud;
   cooldown: EncounterCooldown;
-  duelRoundsToWin: () => number;
+  /** Как превратить ведьму/цель в противника боя (сила, кто бьёт первым). */
+  opponents: OpponentFactory;
   /** Игрок спрятан в кусте — враждебные ведьмы его не замечают и бой не начинают. По умолчанию — нет. */
   isPlayerHidden?: () => boolean;
 }
@@ -52,6 +54,8 @@ function gateDistanceSq(gate: EnergyGate, x: number, z: number): number {
  *
  * Автоматика: враждебная ведьма запускает бой сама при подходе (если тема
  * изучена) или показывает подсказку (если нет). Побеждённая — только по E.
+ * Кто бьёт первым, решается в момент встречи (см. combat/opponent.ts): ведьма,
+ * которая в этот момент видит игрока, начинает сама.
  */
 export class ProximityDetector {
   public nearGate: EnergyGate | null = null;
@@ -158,7 +162,7 @@ export class ProximityDetector {
 
       if (dist <= ENCOUNTER_RADIUS) {
         if (gameState.isLearned(witch.spell.id)) {
-          combat.startEncounter(witch, this.deps.duelRoundsToWin());
+          combat.startEncounter(this.deps.opponents.witch(witch));
         } else if (nothingElseNear) {
           // Подсказка делит место на экране с «Нажми E» — при сундуке/костре/воротах рядом её не показываем.
           const graphLabel = this.isMobileActive() ? "кнопка 📜" : "клавиша G";
@@ -194,7 +198,7 @@ export class ProximityDetector {
     if (this.nearBonfire) return `${key} — сесть у костра`;
     if (this.nearChest) return `${key} — ${this.nearChest.isOpened ? "заглянуть в открытый сундук" : "открыть сундук"}`;
     if (this.nearFriendlyWitch) return `${key} — спарринг с побеждённой ведьмой`;
-    if (this.nearPracticeTarget) return `${key} — потренироваться`;
+    if (this.nearPracticeTarget) return `${key} — потренироваться (бой без риска)`;
     return null;
   }
 }

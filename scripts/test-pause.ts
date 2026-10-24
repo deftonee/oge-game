@@ -404,7 +404,7 @@ function makeRig(over: Partial<PauseMenuDeps> = {}): Rig {
   const keys = new KeyBindings(store, asWindow);
   const gameState = new GameState();
 
-  const flags = { combat: false, graph: false, learning: false, practice: false, gates: false, chest: false, loot: false };
+  const flags = { combat: false, graph: false, learning: false, gates: false, chest: false, loot: false };
   const closedLog: string[] = [];
   const counters = { learningOpen: 0 };
   const closer = (name: keyof typeof flags) => (): void => {
@@ -415,7 +415,6 @@ function makeRig(over: Partial<PauseMenuDeps> = {}): Rig {
     combat: { get isActive() { return flags.combat; } },
     spellGraph: { get isOpen() { return flags.graph; }, close: closer("graph"), toggle: () => void (flags.graph = !flags.graph) },
     learning: { get isActive() { return flags.learning; }, close: closer("learning"), open: () => void counters.learningOpen++ },
-    practice: { get isActive() { return flags.practice; }, close: closer("practice"), open: () => {} },
     gates: { get isActive() { return flags.gates; }, close: closer("gates"), open: () => {} },
     chestLoot: { get isOpen() { return flags.chest; }, close: closer("chest"), show: () => {} },
     lootPresenter: { get isActive() { return flags.loot; } },
@@ -449,7 +448,7 @@ function makeRig(over: Partial<PauseMenuDeps> = {}): Rig {
     keys,
     backpack: {} as never,
     screen: {} as never,
-    duelRoundsToWin: () => 3,
+    opponents: { witch: (w: unknown) => w, target: (t: unknown) => t } as never,
     emulateMobile: true,
     pause,
   });

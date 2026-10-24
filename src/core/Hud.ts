@@ -1,21 +1,18 @@
+import type { PowerPool } from "../combat/PowerPool";
+
 /**
- * Простой HUD поверх канваса: полоска HP игрока + текстовая подсказка.
+ * Простой HUD поверх канваса: шкала Силы игрока + текстовые подсказки.
  * Отдельным DOM-слоем от боевого оверлея, чтобы бой мог рисоваться поверх.
  */
 export class Hud {
   private fill: HTMLElement;
-  public maxHp: number;
-  private hp: number;
 
-  constructor(uiRoot: HTMLElement, maxHp = 100) {
-    this.maxHp = maxHp;
-    this.hp = maxHp;
-
+  constructor(uiRoot: HTMLElement) {
     const hud = document.createElement("div");
     hud.className = "hud";
     hud.innerHTML = `
-      <div class="hud-bar-label">Здоровье</div>
-      <div class="hud-bar"><div class="hud-bar-fill hp" style="width:100%"></div></div>
+      <div class="hud-bar-label">Сила</div>
+      <div class="hud-bar"><div class="hud-bar-fill power" style="width:100%"></div></div>
     `;
     uiRoot.appendChild(hud);
     this.fill = hud.querySelector(".hud-bar-fill") as HTMLElement;
@@ -85,17 +82,12 @@ export class Hud {
     }
   }
 
-  public setHp(value: number): void {
-    this.hp = Math.max(0, Math.min(this.maxHp, value));
-    const pct = (this.hp / this.maxHp) * 100;
-    this.fill.style.width = `${pct}%`;
-  }
-
-  public damage(amount: number): void {
-    this.setHp(this.hp - amount);
-  }
-
-  public get currentHp(): number {
-    return this.hp;
+  /** Показывать шкалу Силы игрока: полоска сама следует за изменениями шкалы. Возвращает функцию отписки. */
+  public bindPower(pool: PowerPool): () => void {
+    const render = (): void => {
+      this.fill.style.width = `${(pool.fraction * 100).toFixed(1)}%`;
+    };
+    render();
+    return pool.subscribe(render);
   }
 }

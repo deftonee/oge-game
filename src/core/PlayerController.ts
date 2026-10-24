@@ -122,6 +122,16 @@ export class PlayerController {
     return { node, torso: { width: TORSO.width, height: TORSO.height, depth: TORSO.depth } };
   }
 
+  /** Курс, в который смотрит модель игрока (рад, 0 = +Z). */
+  public get facingYaw(): number {
+    return this.visual.rotation.y;
+  }
+
+  /** Мгновенно развернуть модель лицом к точке (в бою — к противнику). */
+  public faceToward(x: number, z: number): void {
+    this.visual.rotation.y = Math.atan2(x - this.collider.position.x, z - this.collider.position.z);
+  }
+
   /** Задать вектор мобильного стика (нормированный, кадр-в-кадр). Нулевой вектор инертен. */
   public setJoystick(v: { x: number; y: number } | null): void {
     this.joystickVec = v;

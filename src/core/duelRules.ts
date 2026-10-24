@@ -1,12 +1,12 @@
-import { DEFAULT_ROUNDS_TO_WIN } from "../combat/CombatManager";
+import { TRAINING_WITCH_POWER, WITCH_POWER } from "../combat/combatBalance";
 
 /**
- * Баланс дуэлей: индекс секции -> сколько успешных ударов нужно игроку для
- * победы. Первая секция — тренировочная, хватает одного попадания.
+ * Баланс дуэлей: индекс секции -> сила ведьмы. Первая секция — тренировочная:
+ * ведьма слабая, хватает одного верного удара.
  */
-const ROUNDS_TO_WIN_BY_SECTION: Readonly<Record<number, number>> = { 0: 1 };
+const WITCH_POWER_BY_SECTION: Readonly<Record<number, number>> = { 0: TRAINING_WITCH_POWER };
 
-/** Сколько раундов нужно для победы над ведьмой в секции с данным индексом. */
-export function duelRoundsFor(sectionIndex: number): number {
-  return ROUNDS_TO_WIN_BY_SECTION[sectionIndex] ?? DEFAULT_ROUNDS_TO_WIN;
+/** Сколько Силы у ведьмы в секции с данным индексом. */
+export function witchPowerFor(sectionIndex: number): number {
+  return WITCH_POWER_BY_SECTION[sectionIndex] ?? WITCH_POWER;
 }

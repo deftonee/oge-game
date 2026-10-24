@@ -8,6 +8,7 @@ import type { Chest } from "../entities/Chest";
 import type { KeyBindings } from "./KeyBindings";
 import type { ScreenProjector } from "./screenProjection";
 import type { PauseMenu } from "../ui/pause/PauseMenu";
+import type { OpponentFactory } from "../combat/opponent";
 import { buildLootItems } from "../ui/loot/lootItems";
 import type { LootItem } from "../ui/loot/lootItems";
 
@@ -35,7 +36,8 @@ export interface InteractionDeps {
   backpack: Backpack;
   /** Мировая точка → точка на экране: откуда вылетают и куда улетают находки. */
   screen: ScreenProjector;
-  duelRoundsToWin: () => number;
+  /** Как превратить ведьму/цель в противника боя. */
+  opponents: OpponentFactory;
   /** Принудительно включить мобильные контролы (эмуляция с компа). */
   emulateMobile: boolean;
   /** Меню паузы: Esc / клавиша «пауза» / кнопка на экране. Создаётся снаружи (нужны настройки и состояние). */
@@ -63,7 +65,6 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
     managers.combat.isActive ||
     managers.spellGraph.isOpen ||
     managers.learning.isActive ||
-    managers.practice.isActive ||
     managers.gates.isActive ||
     managers.chestLoot.isOpen ||
     managers.lootPresenter.isActive;
@@ -107,7 +108,7 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
   };
 
   const handleInteract = (): void => {
-    const { combat, spellGraph, learning, practice, gates, chestLoot, lootPresenter } = managers;
+    const { combat, spellGraph, learning, gates, chestLoot, lootPresenter } = managers;
     if (pause.isOpen || combat.isActive || spellGraph.isOpen || lootPresenter.isActive) return;
     if (proximity.nearGate) {
       if (gates.isActive) gates.close();
@@ -119,10 +120,9 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
       if (chestLoot.isOpen) return;
       openChest(proximity.nearChest);
     } else if (proximity.nearFriendlyWitch) {
-      combat.startEncounter(proximity.nearFriendlyWitch, deps.duelRoundsToWin());
+      combat.startEncounter(deps.opponents.witch(proximity.nearFriendlyWitch));
     } else if (proximity.nearPracticeTarget) {
-      if (practice.isActive) practice.close();
-      else practice.open();
+      combat.startEncounter(deps.opponents.target(proximity.nearPracticeTarget));
     }
   };
 
@@ -135,7 +135,6 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
       const hadMenu = anyMenuOpen();
       if (managers.spellGraph.isOpen) managers.spellGraph.close();
       if (managers.learning.isActive) managers.learning.close();
-      if (managers.practice.isActive) managers.practice.close();
       if (managers.gates.isActive) managers.gates.close();
       if (managers.chestLoot.isOpen) managers.chestLoot.close();
       // Автоповтор зажатого Esc паузу не открывает (иначе она тут же закрылась бы следующим повтором).

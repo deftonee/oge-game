@@ -94,7 +94,7 @@ g.document = win.document;
   win.document.body.innerHTML = "";
   const root = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(root as unknown as Node);
-  const hud = new Hud(root, 100);
+  const hud = new Hud(root);
   hud.setControlsHint("тест подсказки");
   check(root.querySelector(".hud-hint")!.textContent === "тест подсказки", "HUD показывает переданную подсказку");
 }

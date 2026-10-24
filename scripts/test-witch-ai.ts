@@ -568,6 +568,27 @@ const stdev = (a: number[]) => Math.sqrt(mean(a.map((v) => (v - mean(a)) ** 2)))
   check(maxChaseRun <= CFG.stuckTime + 0.6, `застрявшая ведьма билась в препятствие ${maxChaseRun.toFixed(1)} с подряд`);
 }
 
+// ---------------------------------------------------------------------------
+// 14. «Видит игрока прямо сейчас» (hasSpottedPlayer) — от этого зависит, кто бьёт первым при встрече.
+// ---------------------------------------------------------------------------
+{
+  const brain = makeBrain(8, 0);
+  const w = makeWorld();
+  w.px = 500; // игрок далеко
+  w.pz = 500;
+  run(brain, w, 2);
+  check(!brain.hasSpottedPlayer, "спокойная ведьма игрока не видит");
+
+  w.px = 0;
+  w.pz = 6; // перед ней, в конусе
+  check(runUntil(brain, w, "notice", 1) && brain.hasSpottedPlayer, "заметила — видит (бьёт первой)");
+  check(runUntil(brain, w, "chase", 3) && brain.hasSpottedPlayer, "идёт к игроку — видит");
+
+  w.hidden = true; // спрятался в куст: ведьма его теряет
+  check(runUntil(brain, w, "search", 4), "потеряла игрока из виду");
+  check(!brain.hasSpottedPlayer, "ищет — уже не видит (подкравшемуся игроку достаётся первый удар)");
+}
+
 console.log(`Проверок: ${checks}, провалов: ${failures}`);
 if (failures > 0) {
   console.error(`FAILED: ${failures}`);
