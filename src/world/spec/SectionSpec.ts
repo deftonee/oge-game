@@ -8,6 +8,7 @@
  */
 
 import type { Vec2 } from "../geometry/SectionGeometry";
+import type { BiomeId } from "../biomes/biomeIds";
 
 export interface WitchSpec {
   id: string;
@@ -140,8 +141,15 @@ export interface SeamSpec {
 export interface SectionSpec {
   index: number;
   tier: number; // 1-3 сложность; 0 — служебная секция подхода к башне, без врагов
+  /** Цвет пола (задаёт окружение секции, см. world/biomes/biomes.ts → applyBiome). */
   color: string;
   borderStyle: BorderStyle;
+  /**
+   * Окружение секции — только ВНЕШНИЙ ВИД (пол, стены, декор, во что превращаются
+   * кусты/деревья/бордюр), игровая логика от него не зависит. Назначается по школе
+   * ворот, через которые входят в секцию (см. world/biomes/biomes.ts).
+   */
+  biome: BiomeId;
   /** Протяжённость секции вдоль её собственной оси (локальные z: 0..length). */
   length: number;
   /** Ширина коридора секции (первая секция — узкий вход; остальные 3×). */

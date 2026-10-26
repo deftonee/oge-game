@@ -1,11 +1,13 @@
 import { getSpellsBySchool } from "../../data/spells";
 import type { GameState } from "../../core/GameState";
-import type { SectionSpec, SeamSpec, SeamPatchSpec } from "../spec/SectionSpec";
+import type { GateSpec, SectionSpec, SeamSpec, SeamPatchSpec } from "../spec/SectionSpec";
 import type { TrackSnapshot } from "../spec/WorldSpec";
 import type { Vec2 } from "../geometry/SectionGeometry";
 import { clamp, localToWorld } from "../geometry/SectionGeometry";
 import { randRange, type RandomFn, type Rng } from "../math/Rng";
 import { SectionContentBuilder } from "../SectionContent";
+import { applyBiome, biomeBeyondGate } from "../biomes/biomes";
+import { DEFAULT_BIOME, type BiomeId } from "../biomes/biomeIds";
 import type { GatePlanner } from "./GatePlanner";
 import type { SectionFactory } from "./SectionFactory";
 import { IdFactory, SectionAssembler } from "./SectionAssembler";
@@ -100,6 +102,17 @@ export class TrackBuilder {
     this.prevSpec = init.prevSpec;
   }
 
+  /**
+   * Окружение следующей стволовой секции: то, что лежит за выходными воротами
+   * предыдущей (школа ворот → биом). Нет ворот (первая секция; схождение J, у
+   * которого их нет) — остаётся прежнее. См. world/biomes/biomes.ts.
+   */
+  private trunkBiome(): BiomeId {
+    const prev = this.prevSpec;
+    if (!prev) return DEFAULT_BIOME;
+    return biomeBeyondGate(prev.gates.length === 1 ? prev.gates[0] : undefined, prev.biome);
+  }
+
   /** Применить конвейер расширений к секции. */
   private assemble(spec: SectionSpec, isFirst: boolean): void {
     this.assembler.assemble(spec, { rng: this.rand, gameState: this.gameState, ids: this.ids, isFirst });
@@ -153,6 +166,7 @@ export class TrackBuilder {
       curvature
     );
     this.currentYaw = startYaw + curvature * length; // курс в конце = курс начала следующей
+    applyBiome(parent, this.trunkBiome());
     this.assemble(parent, isFirst);
 
     const forkAllowed =
@@ -239,7 +253,7 @@ export class TrackBuilder {
 
     // ВАЖНО: ветки и J начинаются у КОНЦА родителя (где стоят её ворота), а не
     // у this.cursor: на этом шаге cursor всё ещё указывает на НАЧАЛО parent.
-    const mkBranch = (branch: "a" | "b", center: number, width: number, gateId: string): SectionSpec => {
+    const mkBranch = (branch: "a" | "b", center: number, width: number, gate: GateSpec): SectionSpec => {
       const isDead = branch === deadSlot;
       const branchLength = isDead ? randRange(rand, DEADEND_LENGTH.min, DEADEND_LENGTH.max) : branchLen;
       const thisTier = isDead ? tier : branchTier;
@@ -256,15 +270,17 @@ export class TrackBuilder {
         this.currentYaw,
         curvature
       );
+      // Выбор ворот = выбор окружения: ветка получает биом школы СВОИХ ворот.
+      applyBiome(spec, biomeBeyondGate(gate, parent.biome));
       spec.forkBranch = branch;
-      spec.forkGateId = gateId;
+      spec.forkGateId = gate.id;
       spec.forkParentIndex = parent.index;
       spec.isDeadEnd = isDead;
       this.assemble(spec, false);
       return spec;
     };
-    const branchA = mkBranch("a", centerA, widthA, parent.gates[0].id);
-    const branchB = mkBranch("b", centerB, widthB, parent.gates[1].id);
+    const branchA = mkBranch("a", centerA, widthA, parent.gates[0]);
+    const branchB = mkBranch("b", centerB, widthB, parent.gates[1]);
 
     // Общая секция-схождение: вход J — на исходной оси parent'а, на «глубине»
     // branchLen — там встречаются обе разошедшиеся ветки.
@@ -281,6 +297,8 @@ export class TrackBuilder {
       this.currentYaw,
       0
     );
+    // Схождение: общий биом веток, если он у них один; иначе нейтральное поле.
+    applyBiome(join, branchA.biome === branchB.biome ? branchA.biome : DEFAULT_BIOME);
     join.seam = this.computeSeam(jStart, [branchA, branchB], deadSlot);
     this.assemble(join, false);
 
@@ -426,7 +444,7 @@ export class TrackBuilder {
       approachStartYaw,
       approachCurvature
     );
-    approach.color = APPROACH_COLOR;
+    approach.color = APPROACH_COLOR; // подход всегда «улица» (поле) — двор перед башней, биом не назначаем
     // Подход — спокойная зона: без сущностей и сундуков, только трава и бордюры.
     this.contentBuilder.apply(approach, APPROACH_RULE);
     return approach;

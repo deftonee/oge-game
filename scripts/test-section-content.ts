@@ -31,6 +31,7 @@ function makeSpec(index: number, tier = 2, length = 40, width = 24): SectionSpec
     tier,
     color: "#ffffff",
     borderStyle: "bushes",
+    biome: "meadow",
     length,
     width,
     start: { x: 0, z: 0 },

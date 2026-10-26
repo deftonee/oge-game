@@ -78,7 +78,9 @@ async function main(): Promise<void> {
   // ниши/развилки добавляют свои rng()-вызовы). Тест должен проверять
   // МЕХАНИЗМ осветления, а не полагаться на то, что конкретному сиду
   // достанется не-белый цвет.
-  const target = witches.find((w) => Color3.FromHexString(w.spell.color).r < 0.95) ?? witches[0];
+  // Яркость считаем по сумме каналов: «огненные» цвета (#ff…) уже упираются в r=1, но g/b у них растут.
+  const brightness = (c: Color3): number => c.r + c.g + c.b;
+  const target = witches.find((w) => brightness(Color3.FromHexString(w.spell.color)) < 2.7) ?? witches[0];
   const spellColor = Color3.FromHexString(target.spell.color);
 
   // --- Friendly-переключение ---
@@ -88,10 +90,10 @@ async function main(): Promise<void> {
   check(scene.getMeshByName(`${target.id}_friendlyMarker`)?.isEnabled() === true, "friendly: маркер должен быть виден");
   const robeMat = scene.getMaterialByName(`${target.id}_robe`)!;
   check(
-    !approx(robeMat.albedoColor.r, spellColor.r) && robeMat.albedoColor.r > spellColor.r,
-    `friendly: платье должно осветлиться (r: ${robeMat.albedoColor.r.toFixed(3)} vs ${spellColor.r.toFixed(3)})`
+    brightness(robeMat.albedoColor) > brightness(spellColor) + 1e-3,
+    `friendly: платье должно осветлиться (яркость: ${brightness(robeMat.albedoColor).toFixed(3)} vs ${brightness(spellColor).toFixed(3)})`
   );
-  console.log(`friendly: платье r=${robeMat.albedoColor.r.toFixed(3)} (было ${spellColor.r.toFixed(3)}) — осветлено`);
+  console.log(`friendly: яркость платья ${brightness(robeMat.albedoColor).toFixed(3)} (было ${brightness(spellColor).toFixed(3)}) — осветлено`);
 
   target.setFriendly(false);
   check(target.friendly === false, "setFriendly(false) должен снять флаг");

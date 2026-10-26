@@ -137,7 +137,8 @@ for (const tier of ["low", "mid", "high"] as const) {
   const gs = new GameState();
   const world = generateWorld(gs, 11);
   const index = new FootprintIndex(world.sections);
-  const spec = world.sections.find((s2) => s2.bushes.length > 0 && s2.trees.length > 0)!;
+  // Листва — свойство поля: в классе на месте кустов и деревьев растения в горшках и шкафы (см. test-biomes).
+  const spec = world.sections.find((s2) => s2.biome === "meadow" && s2.bushes.length > 0 && s2.trees.length > 0)!;
   const chunkScene = scene;
   const before = chunkScene.materials.length;
   const chunk = new SectionChunk(chunkScene, spec, index);

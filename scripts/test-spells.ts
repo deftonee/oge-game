@@ -23,7 +23,7 @@ function check(cond: boolean, msg: string) {
 
 // --- Реестр ---
 check(ALL_SCHOOLS.length === 5, `ожидал 5 школ, получил ${ALL_SCHOOLS.length}`);
-check(ALL_SPELLS.length === 9, `ожидал 9 заклинаний (6 земля + 3 огонь), получил ${ALL_SPELLS.length}`);
+check(ALL_SPELLS.length === 12, `ожидал 12 заклинаний (6 земля + 3 огонь + 3 гроза), получил ${ALL_SPELLS.length}`);
 
 const ids = new Set<string>();
 for (const s of ALL_SPELLS) {
@@ -53,6 +53,15 @@ check(
   getSpellsBySchool("earth").every((s) => !isBridgeSpell(s)),
   "мост не должен считаться в основной школе другой школы (только гхост)"
 );
+
+// --- Школа грозы (электродинамика) ---
+const storm = getSpellsBySchool("storm");
+check(storm.length === 3, `в школе грозы ожидал 3 заклинания, получил ${storm.length}`);
+check(getSchoolById("storm").unlockRule === undefined, "Школа грозы должна быть открыта по умолчанию");
+const joule = ALL_SPELLS.find((s) => s.id === "joule")!;
+check(isBridgeSpell(joule) && joule.school === "storm" && joule.schools.includes("fire"), "joule — мост «гроза + огонь», основная школа — гроза");
+check(joule.prerequisites.join() === "power", "joule требует power");
+check(ALL_SPELLS.find((s) => s.id === "power")!.prerequisites.join() === "ohm", "power требует ohm");
 
 // --- GameState: прогресс и открытие школ ---
 const state = new GameState();

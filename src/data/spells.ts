@@ -11,9 +11,11 @@
 //   staticTarget — тренировка у чучела/дерева/крапивы и пробитие барьера (обязателен всем).
 // Роль без банка = заклинание неприменимо в этом сценарии (fallback не делаем).
 
+import { isBiomeId, type BiomeId } from "../world/biomes/biomeIds";
 import schoolsJson from "./spells/schools.json";
 import earthJson from "./spells/earth.json";
 import fireJson from "./spells/fire.json";
+import stormJson from "./spells/storm.json";
 
 // ---------- Типы ----------
 
@@ -67,6 +69,8 @@ export interface School {
   element: string; // образ раздела (для подсказок)
   description: string;
   unlockRule?: { bridges: number }; // сколько мостов нужно выучить, чтобы открыть школу
+  /** Окружение мира за воротами этой школы (не задано — поле, см. world/biomes). */
+  biome?: BiomeId;
 }
 
 // ---------- Сырые JSON-структуры (валидируются ниже) ----------
@@ -84,6 +88,7 @@ interface RawSchool {
   element?: string;
   description?: string;
   unlockRule?: { bridges: number };
+  biome?: string;
 }
 
 interface RawSpellFile {
@@ -135,6 +140,7 @@ function validateSchools(raw: RawSchool[]): School[] {
     if (rule !== undefined && (!isFiniteNumber(rule.bridges) || !Number.isInteger(rule.bridges) || rule.bridges <= 0)) {
       fail(`${where}: unlockRule.bridges должен быть целым > 0`);
     }
+    if (s.biome !== undefined && !isBiomeId(s.biome)) fail(`${where}: неизвестный biome «${s.biome}»`);
     return {
       id: s.id,
       name: s.name,
@@ -144,6 +150,7 @@ function validateSchools(raw: RawSchool[]): School[] {
       element: s.element ?? "",
       description: s.description ?? "",
       ...(rule ? { unlockRule: { bridges: rule.bridges } } : {}),
+      ...(s.biome ? { biome: s.biome } : {}),
     };
   });
 
@@ -227,6 +234,7 @@ function buildRegistry(): { schools: School[]; spells: Spell[] } {
   const fileSources: Record<string, RawSpellFile> = {
     earth: earthJson as RawSpellFile,
     fire: fireJson as RawSpellFile,
+    storm: stormJson as RawSpellFile,
   };
   // Дополняемость: для новой школы добавляется одна строка ниже (и JSON-файл).
 

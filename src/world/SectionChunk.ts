@@ -12,6 +12,9 @@ import { eyeLevelRadius, type TreeVolume } from "../stealth/cover";
 import { getSpellById } from "../data/spells";
 import { GameState } from "../core/GameState";
 import { getQuality } from "../core/quality";
+import { DEFAULT_BIOME, getBiome, type BiomeDef } from "./biomes/biomes";
+import { buildClassroom } from "./biomes/classroom/ClassroomBuilder";
+import { createClassroomFloorMaterial, floorUvs } from "./biomes/classroom/textures";
 import { createGrassTuft, scatterGrass } from "../render/grass";
 import {
   BUSH_ENVELOPE_RADIUS,
@@ -109,8 +112,13 @@ export class SectionChunk {
   // Статическая геометрия секции
   // -------------------------------------------------------------------------
 
+  /** Окружение секции (spec.biome; у вручную собранных секций без поля — поле). */
+  private get biome(): BiomeDef {
+    return getBiome(this.spec.biome ?? DEFAULT_BIOME);
+  }
+
   private buildEnvironment(): void {
-    const wallMat = this.makeMaterial(`wallMat_${this.spec.index}`, SectionChunk.WALL_COLOR);
+    const wallMat = this.makeMaterial(`wallMat_${this.spec.index}`, this.biome.wallColor);
     this.disposables.push(wallMat);
 
     // Пол и стены выводятся из ОДНОГО набора полигонов (geometry/Footprint):
@@ -120,6 +128,21 @@ export class SectionChunk {
     // отдельные заплатки.
     this.buildFloors();
     this.buildBoundaryWalls(wallMat);
+
+    // Окружение «класс»: вместо травы, кустов, деревьев и бордюра — мебель и
+    // оборудование (см. biomes/classroom). Пол и стены выше общие для всех биомов.
+    if (this.spec.biome === "classroom") {
+      buildClassroom({
+        scene: this.scene,
+        spec: this.spec,
+        toWorld: (x, z) => this.toWorld(x, z),
+        disposables: this.disposables,
+        bushVolumes: this.bushVolumes,
+        treeVolumes: this.treeVolumes,
+      });
+      return;
+    }
+
     this.buildGrass();
     this.buildBushes();
     this.buildTrees();
@@ -140,9 +163,6 @@ export class SectionChunk {
     return localToWorld(this.spec, localX, localZ);
   }
 
-  private static readonly WALL_HEIGHT = 2.5;
-  private static readonly WALL_COLOR = "#4a4d52";
-
   /**
    * Пол: по мешу-ленте на каждый полигон секции (полоса-дуга, заплатки шва
    * веток, ниши, площадка у башни). Меш строится из тех же точек, что и
@@ -150,16 +170,19 @@ export class SectionChunk {
    */
   private buildFloors(): void {
     const materials = new Map<string, StandardMaterial>();
+    const tiled = this.spec.biome === "classroom";
     for (const piece of this.footprints.piecesOf(this.spec)) {
       let mat = materials.get(piece.color);
       if (!mat) {
-        mat = this.makeMaterial(`floorMat_${piece.id}`, piece.color);
+        // Класс: плитка с цветом секции (если нет canvas — однотонный пол, как у остальных биомов).
+        mat = (tiled ? createClassroomFloorMaterial(this.scene, `floorMat_${piece.id}`, piece.color) : null) ?? this.makeMaterial(`floorMat_${piece.id}`, piece.color);
         materials.set(piece.color, mat);
         this.disposables.push(mat);
       }
+      const paths = this.railPaths(piece);
       const floor = MeshBuilder.CreateRibbon(
         `floor_${piece.id}`,
-        { pathArray: this.railPaths(piece), sideOrientation: Mesh.DOUBLESIDE },
+        { pathArray: paths, sideOrientation: Mesh.DOUBLESIDE, ...(mat.diffuseTexture ? { uvs: floorUvs(paths) } : {}) },
         this.scene
       );
       floor.material = mat;
@@ -182,7 +205,7 @@ export class SectionChunk {
   private buildBoundaryWalls(wallMat: StandardMaterial): void {
     const walls: readonly WallSeg[] = this.footprints.wallsOf(this.spec);
     if (walls.length === 0) return;
-    const h = SectionChunk.WALL_HEIGHT;
+    const h = this.biome.wallHeight; // высота стен — свойство окружения
     const boxes: Mesh[] = walls.map((w, i) => {
       const dx = w.b.x - w.a.x;
       const dz = w.b.z - w.a.z;
@@ -502,7 +525,8 @@ export class SectionChunk {
 
     for (const p of this.spec.practiceTargets) {
       const pos = this.toWorld(p.x, p.z);
-      const target = new PracticeTarget(this.scene, new Vector3(pos.x, 0, pos.z), p.id, p.kind);
+      // Деревца и крапива в классе неуместны: биом может подменить вид цели (логика та же).
+      const target = new PracticeTarget(this.scene, new Vector3(pos.x, 0, pos.z), p.id, this.biome.practiceKind ?? p.kind);
       this.practiceTargets.push(target);
       this.disposables.push(target);
     }

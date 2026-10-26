@@ -1,6 +1,7 @@
 import type { SectionSpec } from "../spec/SectionSpec";
 import type { Vec2 } from "../geometry/SectionGeometry";
 import { pick, type RandomFn } from "../math/Rng";
+import { DEFAULT_BIOME } from "../biomes/biomeIds";
 import { BORDER_STYLES, TIER_COLORS } from "./WorldGenConfig";
 
 /**
@@ -29,6 +30,8 @@ export class SectionFactory {
       tier,
       color: TIER_COLORS[tier] ?? TIER_COLORS[3],
       borderStyle: pick(this.rng, BORDER_STYLES),
+      // Окружение назначает TrackBuilder (по школе ворот перед секцией) — тут поле по умолчанию.
+      biome: DEFAULT_BIOME,
       length,
       width,
       start,
