@@ -16,7 +16,8 @@
       "icon": "🔥",
       "color": "#ff6b3d",
       "element": "Огонь и лёд",
-      "description": "Тепловые явления: МКТ, термодинамика."
+      "description": "Тепловые явления: МКТ, термодинамика.",
+      "biome": "steampunk"
     },
     {
       "id": "storm",

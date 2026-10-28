@@ -15,6 +15,8 @@ import { getQuality } from "../core/quality";
 import { DEFAULT_BIOME, getBiome, type BiomeDef } from "./biomes/biomes";
 import { buildClassroom } from "./biomes/classroom/ClassroomBuilder";
 import { createClassroomFloorMaterial, floorUvs } from "./biomes/classroom/textures";
+import { buildSteampunk } from "./biomes/steampunk/SteampunkBuilder";
+import { createSteampunkFloorMaterial, steampunkFloorUvs } from "./biomes/steampunk/textures";
 import { createGrassTuft, scatterGrass } from "../render/grass";
 import {
   BUSH_ENVELOPE_RADIUS,
@@ -143,6 +145,20 @@ export class SectionChunk {
       return;
     }
 
+    // Окружение «стимпанк» (тема термодинамики): вместо травы и кустов — паровые машины,
+    // котлы и клубы пара (см. biomes/steampunk). Пол и стены выше общие для всех биомов.
+    if (this.spec.biome === "steampunk") {
+      buildSteampunk({
+        scene: this.scene,
+        spec: this.spec,
+        toWorld: (x, z) => this.toWorld(x, z),
+        disposables: this.disposables,
+        bushVolumes: this.bushVolumes,
+        treeVolumes: this.treeVolumes,
+      });
+      return;
+    }
+
     this.buildGrass();
     this.buildBushes();
     this.buildTrees();
@@ -170,19 +186,28 @@ export class SectionChunk {
    */
   private buildFloors(): void {
     const materials = new Map<string, StandardMaterial>();
-    const tiled = this.spec.biome === "classroom";
+    const biome = this.spec.biome;
     for (const piece of this.footprints.piecesOf(this.spec)) {
       let mat = materials.get(piece.color);
       if (!mat) {
-        // Класс: плитка с цветом секции (если нет canvas — однотонный пол, как у остальных биомов).
-        mat = (tiled ? createClassroomFloorMaterial(this.scene, `floorMat_${piece.id}`, piece.color) : null) ?? this.makeMaterial(`floorMat_${piece.id}`, piece.color);
+        // Класс — плитка, стимпанк — клёпаная сталь, оба с цветом секции (если нет canvas —
+        // однотонный пол, как у остальных биомов).
+        const name = `floorMat_${piece.id}`;
+        const textured =
+          biome === "classroom"
+            ? createClassroomFloorMaterial(this.scene, name, piece.color)
+            : biome === "steampunk"
+              ? createSteampunkFloorMaterial(this.scene, name, piece.color)
+              : null;
+        mat = textured ?? this.makeMaterial(name, piece.color);
         materials.set(piece.color, mat);
         this.disposables.push(mat);
       }
       const paths = this.railPaths(piece);
+      const uvs = !mat.diffuseTexture ? undefined : biome === "steampunk" ? steampunkFloorUvs(paths) : floorUvs(paths);
       const floor = MeshBuilder.CreateRibbon(
         `floor_${piece.id}`,
-        { pathArray: paths, sideOrientation: Mesh.DOUBLESIDE, ...(mat.diffuseTexture ? { uvs: floorUvs(paths) } : {}) },
+        { pathArray: paths, sideOrientation: Mesh.DOUBLESIDE, ...(uvs ? { uvs } : {}) },
         this.scene
       );
       floor.material = mat;

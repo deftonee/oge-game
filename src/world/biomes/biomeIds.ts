@@ -12,7 +12,7 @@
  * Чтобы добавить окружение: добавь id сюда, описание — в biomes.ts, а школе в
  * data/spells/schools.json допиши `"biome": "<id>"`.
  */
-export const BIOME_IDS = ["meadow", "classroom"] as const;
+export const BIOME_IDS = ["meadow", "classroom", "steampunk"] as const;
 
 export type BiomeId = (typeof BIOME_IDS)[number];
 

@@ -54,6 +54,17 @@ export const BIOMES: Readonly<Record<BiomeId, BiomeDef>> = {
     grass: false,
     practiceKind: "dummy",
   },
+  steampunk: {
+    id: "steampunk",
+    // Клёпаные стальные плиты с бронзовым отливом: чем сложнее секция, тем темнее и «закопчённее».
+    floorColors: { 1: "#a69078", 2: "#8b7762", 3: "#6f5f50" },
+    // Тёмный кирпич котельной.
+    wallColor: "#4b3a33",
+    // Чуть выше класса (2.7): над машинами висят трубы и иллюминаторы, но камера по-прежнему орбитальная.
+    wallHeight: 2.8,
+    grass: false,
+    practiceKind: "dummy",
+  },
 };
 
 export function getBiome(id: BiomeId): BiomeDef {

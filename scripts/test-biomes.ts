@@ -2,7 +2,7 @@
  * Окружения мира (биомы): назначение по школе ворот, раскладка школьного класса
  * и его сборка на настоящем Babylon (NullEngine).
  *
- *  1. Данные: у школы грозы biome="classroom", у остальных — поле.
+ *  1. Данные: у школы грозы biome="classroom", у школы пламени — "steampunk", у остальных — поле.
  *  2. Назначение (на сидах): секция получает биом школы ворот ПЕРЕД собой; ветки —
  *     биом СВОИХ ворот; схождение — общий биом веток, иначе поле; первая секция и
  *     подход к башне — всегда поле; цвет пола соответствует биому.
@@ -60,7 +60,8 @@ check(isBiomeId("classroom") && isBiomeId("meadow") && !isBiomeId("lava") && !is
 check(BIOME_IDS.includes(DEFAULT_BIOME), "биом по умолчанию — известный");
 check(getSchoolById("storm").biome === "classroom", "школа грозы (электродинамика) — окружение «класс»");
 check(biomeOfSchool("storm") === "classroom", "biomeOfSchool(storm) = classroom");
-check(biomeOfSchool("earth") === "meadow" && biomeOfSchool("fire") === "meadow", "земля и огонь — поле");
+check(getSchoolById("fire").biome === "steampunk" && biomeOfSchool("fire") === "steampunk", "школа пламени (термодинамика) — окружение «стимпанк»");
+check(biomeOfSchool("earth") === "meadow", "школа земли — поле");
 check(biomeOfSchool(null) === "meadow" && biomeOfSchool(undefined) === "meadow", "ворота без школы — поле");
 check(getBiome("classroom").grass === false && getBiome("meadow").grass === true, "трава только в поле");
 check(floorColorOf("classroom", 1) !== floorColorOf("classroom", 3), "пол класса различается по сложности");
