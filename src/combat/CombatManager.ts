@@ -107,6 +107,7 @@ export class CombatManager {
     let outcome: BattleOutcome = "retreated";
     try {
       outcome = await this.fight(battle);
+      this.announce(outcome);
       if (outcome !== "retreated") {
         await this.view.showResult(outcome === "won", battle.opponent.messages[outcome]);
       }
@@ -238,6 +239,16 @@ export class CombatManager {
       console.warn("[combat] анимация удара не удалась:", err);
     }
     impact();
+  }
+
+  /** Сообщает сцене исход до окна результата. Сбой сцены бой не ломает. */
+  private announce(outcome: BattleOutcome): void {
+    try {
+      this.stage.outcome?.(outcome);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[combat] сцена не смогла показать исход боя:", err);
+    }
   }
 
   private conclude(battle: Battle, outcome: BattleOutcome): void {

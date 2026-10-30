@@ -174,6 +174,14 @@ export class Witch {
     return this.brain.state;
   }
 
+  /**
+   * Насколько ведьма встревожена из-за игрока: none — спокойна (или дружелюбна), notice — что-то заметила,
+   * chase — гонится, search — потеряла и ищет. Нужен реакциям героя (оглянуться, замереть, выдохнуть).
+   */
+  public get alertLevel(): "none" | "notice" | "search" | "chase" {
+    return this.friendly ? "none" : this.brain.alert;
+  }
+
   /** Ведьма враждебна и в этот момент видит игрока (заметила или идёт к нему) — при встрече она бьёт первой. */
   public get hasSpottedPlayer(): boolean {
     return !this.friendly && this.brain.hasSpottedPlayer;

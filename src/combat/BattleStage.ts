@@ -1,5 +1,5 @@
 import type { Spell } from "../data/spells";
-import type { BattleOpponent } from "./opponent";
+import type { BattleOpponent, BattleOutcome } from "./opponent";
 
 /** Чем закончился удар: попал, был отражён щитом (верная защита) или ушёл мимо (неверный ответ). */
 export type StrikeResult = "hit" | "blocked" | "missed";
@@ -24,6 +24,11 @@ export interface BattleStage {
   begin(opponent: BattleOpponent): void;
   /** Показать удар. Промис завершается, когда анимация закончилась и камера вернулась за спину игрока. */
   strike(strike: Strike): Promise<void>;
+  /**
+   * Исход боя известен (до окна результата): герой радуется, сникает или выдыхает.
+   * Необязателен: сцене без анимаций он не нужен.
+   */
+  outcome?(outcome: BattleOutcome): void;
   /** Бой закончился: вернуть камеру игроку. */
   end(): void;
 }

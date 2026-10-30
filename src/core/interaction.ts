@@ -9,6 +9,7 @@ import type { KeyBindings } from "./KeyBindings";
 import type { ScreenProjector } from "./screenProjection";
 import type { PauseMenu } from "../ui/pause/PauseMenu";
 import type { OpponentFactory } from "../combat/opponent";
+import type { PlayerReactions } from "./PlayerReactions";
 import { buildLootItems } from "../ui/loot/lootItems";
 import type { LootItem } from "../ui/loot/lootItems";
 
@@ -42,6 +43,8 @@ export interface InteractionDeps {
   emulateMobile: boolean;
   /** Меню паузы: Esc / клавиша «пауза» / кнопка на экране. Создаётся снаружи (нужны настройки и состояние). */
   pause: PauseMenu;
+  /** Живые реакции персонажа (жесты у сундука и барьера, у костра, при «действии» без цели). Без них всё работает, но молча. */
+  reactions?: PlayerReactions;
 }
 
 /**
@@ -55,7 +58,8 @@ export interface InteractionDeps {
  * Пока пауза открыта, её слушатель (capture на window) не пускает клавиши сюда.
  *
  * handleInteract использует результат детекта ближайших объектов (ProximityDetector):
- * ворота > костёр > сундук > дружелюбная ведьма > тренировочная цель.
+ * ворота > костёр > сундук > дружелюбная ведьма > тренировочная цель. Если рядом никого
+ * и никакое окно не открыто, персонаж просто чем-нибудь себя занимает (см. PlayerReactions).
  */
 export function createInteraction(deps: InteractionDeps): InteractionApi {
   const { managers, proximity, pause } = deps;
@@ -112,17 +116,30 @@ export function createInteraction(deps: InteractionDeps): InteractionApi {
     if (pause.isOpen || combat.isActive || spellGraph.isOpen || lootPresenter.isActive) return;
     if (proximity.nearGate) {
       if (gates.isActive) gates.close();
-      else gates.open(proximity.nearGate);
+      else {
+        const gate = proximity.nearGate;
+        gates.open(gate);
+        deps.reactions?.onGateOpened(gate.position.x, gate.position.z);
+      }
     } else if (proximity.nearBonfire) {
       if (learning.isActive) learning.close();
-      else learning.open();
+      else {
+        const bonfire = proximity.nearBonfire;
+        learning.open();
+        if (learning.isActive) deps.reactions?.onBonfireOpened(bonfire.position.x, bonfire.position.z);
+      }
     } else if (proximity.nearChest) {
       if (chestLoot.isOpen) return;
-      openChest(proximity.nearChest);
+      const chest = proximity.nearChest;
+      openChest(chest);
+      deps.reactions?.onChestOpened(chest.position.x, chest.position.z);
     } else if (proximity.nearFriendlyWitch) {
       combat.startEncounter(deps.opponents.witch(proximity.nearFriendlyWitch));
     } else if (proximity.nearPracticeTarget) {
       combat.startEncounter(deps.opponents.target(proximity.nearPracticeTarget));
+    } else if (!anyMenuOpen()) {
+      // Рядом никого: просто нажал «действие» — почесал голову, присел, огляделся…
+      deps.reactions?.onIdleInteract();
     }
   };
 

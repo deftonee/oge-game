@@ -1,7 +1,20 @@
 import { Color3, Vector3 } from "@babylonjs/core";
 import type { ArcRotateCamera, Scene } from "@babylonjs/core";
 import type { BattleStage, Strike } from "../BattleStage";
-import type { BattleOpponent } from "../opponent";
+import type { BattleOpponent, BattleOutcome } from "../opponent";
+import {
+  BLOCK_FOR_GUARD,
+  CHALLENGE_GESTURES,
+  DEFEAT_GESTURES,
+  GUARD_GESTURES,
+  HIT_CHEER_GESTURES,
+  HIT_RECOIL_GESTURES,
+  MISS_GESTURES,
+  RELIEF_GESTURES,
+  VICTORY_GESTURES,
+} from "../../core/playerGestures";
+import type { GestureId } from "../../core/playerGestures";
+import { castGesturesFor } from "./playerCasts";
 import { CameraDirector } from "./CameraDirector";
 import type { CameraInputControl } from "./CameraDirector";
 import { StrikeFx } from "./StrikeFx";
@@ -14,7 +27,10 @@ export const STAGE_TIMING = {
   beginGlide: 0.5,
   /** Камера переходит на ракурс удара. */
   shotGlide: 0.35,
-  /** Замах противника перед вылетом заклинания (у игрока замаха нет — только короткая пауза). */
+  /**
+   * Замах противника перед вылетом заклинания. У игрока замах — его жест каста: заклинание вылетает
+   * в момент «выпуска» жеста (PlayerAnimator.releaseAt); playerWindup — минимум, если жеста нет.
+   */
   opponentWindup: 0.18,
   playerWindup: 0.05,
   /** Камера задерживается на месте попадания. */
@@ -28,12 +44,22 @@ const PLAYER_AIM_LIFT = 0.15;
 /** Сцена не должна «перематывать» анимацию после лага или паузы вкладки. */
 const MAX_FRAME_SECONDS = 0.1;
 
+/** Что сцене нужно от аниматора игрока (PlayerAnimator подходит как есть). */
+export interface StageAnimator {
+  play(id: GestureId, force?: boolean): boolean;
+  playOneOf(ids: readonly GestureId[], poolKey?: string, force?: boolean): GestureId | null;
+  releaseAt(id: GestureId): number;
+  stopGesture(): void;
+}
+
 /** Что сцене нужно от игрока (так сцену можно проверять без настоящего PlayerController). */
 export interface StagePlayer {
   readonly position: Vector3;
   /** Курс, в который смотрит модель игрока (0 = +Z). */
   readonly facingYaw: number;
   faceToward(x: number, z: number): void;
+  /** Жесты героя в бою (каст, защита, отдача, радость). Без него сцена работает молча, как раньше. */
+  readonly animator?: StageAnimator;
 }
 
 export interface BattleStageDeps {
@@ -80,6 +106,8 @@ export class BabylonBattleStage implements BattleStage {
     const p = this.player.position;
     const o = opponent.anchor.position;
     this.player.faceToward(o.x, o.z);
+    this.player.animator?.stopGesture(); // недочёсанная голова не должна торчать из боевой стойки
+    this.player.animator?.playOneOf(CHALLENGE_GESTURES, "challenge", true); // вызов противнику
     if (opponent.faceToward) opponent.faceToward(p.x, p.z);
     else opponent.anchor.rotation.y = yawToward(o.x, o.z, p.x, p.z);
 
@@ -111,22 +139,46 @@ export class BabylonBattleStage implements BattleStage {
     await this.director.glideTo(strikeShotPose(attacker, defender, this.camera.alpha), STAGE_TIMING.shotGlide);
     if (!alive()) return impact();
 
-    if (strike.from === "opponent") opponent.playCast?.();
+    const kind = strikeKindFor(strike.spell);
+    const animator = this.player.animator;
+    let startDelay: number = strike.from === "opponent" ? STAGE_TIMING.opponentWindup : STAGE_TIMING.playerWindup;
+    let guard: GestureId | null = null;
+    if (strike.from === "opponent") {
+      opponent.playCast?.();
+      guard = animator?.playOneOf(GUARD_GESTURES, "guard", true) ?? null; // закрывается от удара, пока тот летит
+    } else if (animator) {
+      // Каст: то одной рукой, то обеими; заклинание вылетает в момент «выпуска» жеста.
+      const cast = animator.playOneOf(castGesturesFor(kind), `cast:${kind}`, true);
+      if (cast) startDelay = Math.max(startDelay, animator.releaseAt(cast));
+    }
     await this.fx.play({
-      kind: strikeKindFor(strike.spell),
+      kind,
       from: attacker,
       to: defender,
       color: Color3.FromHexString(strike.spell.color),
       result: strike.result,
-      startDelay: strike.from === "opponent" ? STAGE_TIMING.opponentWindup : STAGE_TIMING.playerWindup,
-      onImpact: impact,
+      startDelay,
+      onImpact: () => {
+        if (!impacted) this.reactToImpact(strike, guard);
+        impact();
+      },
     });
     impact(); // на случай, если показ оборвали до попадания
     if (!alive()) return;
+    this.reactToOwnStrike(strike);
 
     await this.director.hold(STAGE_TIMING.hold);
     if (!alive()) return;
     await this.director.glideTo(this.restPose(), STAGE_TIMING.returnGlide);
+  }
+
+  /** Исход боя: победитель радуется (каждый раз по-разному), проигравший сникает, отступивший выдыхает. */
+  public outcome(outcome: BattleOutcome): void {
+    const animator = this.player.animator;
+    if (!animator) return;
+    if (outcome === "won") animator.playOneOf(VICTORY_GESTURES, "victory", true);
+    else if (outcome === "lost") animator.playOneOf(DEFEAT_GESTURES, "defeat", true);
+    else animator.playOneOf(RELIEF_GESTURES, "relief", true);
   }
 
   public end(): void {
@@ -146,6 +198,23 @@ export class BabylonBattleStage implements BattleStage {
   public dispose(): void {
     this.end();
     this.fx.dispose();
+  }
+
+  /** Чужой удар долетел: щит принял его (толчок, руки дрожат) или он попал (отбросило). */
+  private reactToImpact(strike: Strike, guard: GestureId | null): void {
+    const animator = this.player.animator;
+    if (!animator || strike.from !== "opponent") return;
+    // Удар в защиту продолжает ту самую защиту, которую герой выбрал на замахе.
+    if (strike.result === "blocked") animator.play((guard && BLOCK_FOR_GUARD[guard]) || "blockImpact", true);
+    else if (strike.result === "hit") animator.playOneOf(HIT_RECOIL_GESTURES, "hitRecoil", true);
+  }
+
+  /** Свой удар показан: попал — «есть!», ушёл мимо — ладонью по лицу. */
+  private reactToOwnStrike(strike: Strike): void {
+    const animator = this.player.animator;
+    if (!animator || strike.from !== "player") return;
+    if (strike.result === "hit") animator.playOneOf(HIT_CHEER_GESTURES, "hitCheer", true);
+    else if (strike.result === "missed") animator.playOneOf(MISS_GESTURES, "miss", true);
   }
 
   private restPose() {

@@ -3,19 +3,18 @@ import {
   Mesh,
   MeshBuilder,
   Vector3,
-  StandardMaterial,
-  Color3,
   TransformNode,
 } from "@babylonjs/core";
 import type { ActionId } from "../settings/settings";
+import { PlayerAnimator } from "./PlayerAnimator";
+import type { PlayerMotion } from "./PlayerAnimator";
+import { HIP_Y, TORSO, buildPlayerRig } from "./playerRig";
+import type { PlayerRig } from "./playerRig";
 
 /** Что игроку нужно от ввода: зажато ли действие движения (клавиши — в настройках, см. KeyBindings). */
 export interface MovementInput {
   isDown(action: ActionId): boolean;
 }
-
-/** Размеры торса блочного персонажа (м) и высота его центра над ногами. */
-const TORSO = { width: 0.7, height: 0.8, depth: 0.4, centerY: 1.0 } as const;
 
 /**
  * Точка крепления на спине: начало координат — центр задней грани торса,
@@ -31,13 +30,19 @@ export interface BackMount {
 /**
  * Простой персонаж от третьего лица без физдвижка:
  * - коллайдер — невидимый бокс с checkCollisions + ellipsoid, двигаем через moveWithCollisions
- * - видимая модель — блочный человечек в стиле Roblox, гружёная только эстетически
+ * - видимая модель — блочный человечек в стиле Roblox с шарнирами в плечах и бёдрах (см. playerRig),
+ *   его оживляет PlayerAnimator: дыхание, походка, жесты и реакции
  * - гравитация — наивная: каждый кадр тянем вниз, коллизии с полом останавливают падение
  */
 export class PlayerController {
   public readonly collider: Mesh;
   /** Где у персонажа спина (дочерний узел визуала: поворачивается вместе с ним и прозрачнеет в кустах). */
   public readonly backMount: BackMount;
+  /** Аниматор персонажа: дыхание и походка идут сами, жесты и позы запускают реакции мира и бой. */
+  public readonly animator: PlayerAnimator;
+  /** Как двигался игрок в последнем кадре (для реакций: упёрся в стену, стоит без дела). */
+  public readonly motion: PlayerMotion = { speed: 0, intent: false, progress: 1 };
+  private readonly rig: PlayerRig;
   private readonly visual: TransformNode;
   private readonly scene: Scene;
   private readonly moveSpeed = 6.5; // м/с
@@ -61,8 +66,10 @@ export class PlayerController {
     this.collider.ellipsoid = new Vector3(0.4, 0.9, 0.4);
     this.collider.ellipsoidOffset = new Vector3(0, 0.9, 0);
 
-    this.visual = this.buildBlockyCharacter();
+    this.visual = new TransformNode("playerVisual", scene);
     this.visual.parent = this.collider;
+    this.rig = buildPlayerRig(scene, this.visual);
+    this.animator = new PlayerAnimator(this.rig);
     this.backMount = this.createBackMount();
     // Визуал центрируется на коллайдере: ноги модели (низ ног на y=0 в
     // локальных координатах модели) стоят ровно на полу, когда коллайдер
@@ -71,54 +78,13 @@ export class PlayerController {
     this.visual.position = new Vector3(0, 0, 0);
   }
 
-  private buildBlockyCharacter(): TransformNode {
-    const root = new TransformNode("playerVisual", this.scene);
-
-    const skin = new StandardMaterial("skinMat", this.scene);
-    skin.diffuseColor = Color3.FromHexString("#ffd08a");
-
-    const shirt = new StandardMaterial("shirtMat", this.scene);
-    shirt.diffuseColor = Color3.FromHexString("#4fd6c8");
-
-    const pants = new StandardMaterial("pantsMat", this.scene);
-    pants.diffuseColor = Color3.FromHexString("#2c3455");
-
-    const head = MeshBuilder.CreateBox("head", { size: 0.5 }, this.scene);
-    head.material = skin;
-    head.position.y = 1.55;
-    head.parent = root;
-
-    const torso = MeshBuilder.CreateBox("torso", { width: TORSO.width, height: TORSO.height, depth: TORSO.depth }, this.scene);
-    torso.material = shirt;
-    torso.position.y = TORSO.centerY;
-    torso.parent = root;
-
-    const legL = MeshBuilder.CreateBox("legL", { width: 0.3, height: 0.8, depth: 0.35 }, this.scene);
-    legL.material = pants;
-    legL.position.set(-0.2, 0.4, 0);
-    legL.parent = root;
-
-    const legR = legL.clone("legR");
-    legR.position.x = 0.2;
-    legR.parent = root;
-
-    const armL = MeshBuilder.CreateBox("armL", { width: 0.25, height: 0.75, depth: 0.25 }, this.scene);
-    armL.material = shirt;
-    armL.position.set(-0.5, 1.0, 0);
-    armL.parent = root;
-
-    const armR = armL.clone("armR");
-    armR.position.x = 0.5;
-    armR.parent = root;
-
-    return root;
-  }
-
   private createBackMount(): BackMount {
     const node = new TransformNode("backMount", this.scene);
-    node.parent = this.visual;
-    // Персонаж смотрит в +z, значит спина — в −z; узел стоит на середине задней грани торса.
-    node.position.set(0, TORSO.centerY, -TORSO.depth / 2);
+    // Рюкзак висит на торсе: наклоняется, приседает и прыгает вместе с телом.
+    node.parent = this.rig.torso;
+    // Персонаж смотрит в +z, значит спина — в −z; узел стоит на середине задней грани торса
+    // (узел торса стоит в тазу, на высоте HIP_Y, поэтому центр торса — на TORSO.centerY − HIP_Y выше него).
+    node.position.set(0, TORSO.centerY - HIP_Y, -TORSO.depth / 2);
     return { node, torso: { width: TORSO.width, height: TORSO.height, depth: TORSO.depth } };
   }
 
@@ -175,12 +141,28 @@ export class PlayerController {
       .scale(this.moveSpeed * deltaSeconds)
       .add(new Vector3(0, this.verticalVelocity * deltaSeconds, 0));
 
+    const beforeX = this.collider.position.x;
+    const beforeZ = this.collider.position.z;
     this.collider.moveWithCollisions(displacement);
+    this.trackMotion(deltaSeconds, moveDir, this.collider.position.x - beforeX, this.collider.position.z - beforeZ);
 
     // Если уперлись в пол (вертикальная скорость гасится коллизией) — сбрасываем разгон падения
     if (this.collider.position.y < 1.01) {
       this.verticalVelocity = 0;
     }
+  }
+
+  /**
+   * Запоминает, как игрок реально подвинулся, и двигает аниматор. Прогресс — доля желаемого шага
+   * по направлению хода: упёрся лбом в стену — около нуля, скользит вдоль стены под углом — больше.
+   */
+  private trackMotion(dt: number, moveDir: Vector3, dx: number, dz: number): void {
+    const wanted = this.moveSpeed * dt;
+    const intent = moveDir.lengthSquared() > 0;
+    this.motion.intent = intent;
+    this.motion.speed = dt > 1e-6 ? Math.hypot(dx, dz) / dt : 0;
+    this.motion.progress = intent && wanted > 1e-6 ? (dx * moveDir.x + dz * moveDir.z) / wanted : 1;
+    this.animator.update(dt, this.motion);
   }
 
   private lerpAngle(from: number, to: number, t: number): number {

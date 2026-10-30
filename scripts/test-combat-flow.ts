@@ -51,6 +51,8 @@ class RecordingStage implements BattleStage {
   public events: string[] = [];
   public strikes: Array<{ from: string; spell: string; result: string }> = [];
   public afterImpact: ((s: Strike) => void) | null = null;
+  /** Исходы, о которых сцена узнала (до окна результата — см. BattleStage.outcome). */
+  public outcomes: string[] = [];
   begin(): void {
     this.events.push("begin");
   }
@@ -59,6 +61,9 @@ class RecordingStage implements BattleStage {
     s.onImpact?.();
     this.afterImpact?.(s);
     return Promise.resolve();
+  }
+  outcome(o: BattleOutcome): void {
+    this.outcomes.push(o);
   }
   end(): void {
     this.events.push("end");
@@ -223,6 +228,7 @@ async function main(): Promise<void> {
     answer(env.root, true);
     check(await waitFor(env, "result", "итог боя"), "после верного удара ведьма без Силы — итог");
     check(text(env.root, ".combat-result-title") === "Победа!" && text(env.root, ".combat-question") === "Победили!", "окно победы с текстом противника");
+    check(env.stage.outcomes.join() === "won", "сцена узнала о победе уже к показу окна результата (герой радуется под ним)");
     check(env.stage.strikes.length === 1 && env.stage.strikes[0].from === "player" && env.stage.strikes[0].result === "hit", "на сцене один удар игрока");
     check(bar(env.root, "opponent") === 0, "у ведьмы Сила кончилась");
     check(env.power.current === PLAYER_MAX_POWER, "игрок не потерял Силу (ведьма не успела ударить)");
@@ -267,6 +273,7 @@ async function main(): Promise<void> {
 
     await tick(); // исход боя сообщается через микрозадачи
     check(env.ended.length === 1 && env.ended[0].outcome === "retreated", "отступление сообщено");
+    check(env.stage.outcomes.join() === "retreated", "сцена узнала об отступлении (герой выдыхает)");
     check(!env.combat.isActive && !env.root.querySelector(".combat-result-title"), "при отступлении итогового окна нет");
     check(env.power.current === PLAYER_MAX_POWER - WITCH_HIT_DAMAGE, "после отступления Сила игрока не восстанавливается мгновенно (её вернёт время вне боя)");
   }
@@ -284,6 +291,7 @@ async function main(): Promise<void> {
     await defend(env, false);
     check(await waitFor(env, "result", "итог поражения"), "когда Сила игрока кончилась — итог");
     check(text(env.root, ".combat-result-title") === "Поражение" && text(env.root, ".combat-question") === "Проиграли.", "окно поражения");
+    check(env.stage.outcomes.join() === "lost", "сцена узнала о поражении к показу окна результата (герой сникает)");
     check(env.power.isDepleted && bar(env.root, "player") === 0, "шкала игрока пуста");
     check(env.stage.strikes.filter((s) => s.from === "opponent" && s.result === "hit").length === 3, "ровно три попадания ведьмы");
     proceed(env.root);
@@ -418,6 +426,18 @@ async function main(): Promise<void> {
         retreat(env.root);
         await tick(); // исход боя сообщается через микрозадачи
         check(!env.combat.isActive, `${sc.name}: бой завершается штатно`);
+      }
+
+      // Сцена падает при показе исхода: бой всё равно доходит до результата и завершается как победа.
+      {
+        const stage: BattleStage = { begin() {}, end() {}, strike: (s) => (s.onImpact?.(), Promise.resolve()), outcome: () => { throw new Error("сбой жеста"); } };
+        const env = setup({ stage });
+        env.combat.startEncounter(fakeOpponent({ maxPower: TRAINING_WITCH_POWER }));
+        await castSpell(env, "spark", true);
+        check(await waitFor(env, "result", "итог при сбое показа исхода"), "сбой показа исхода: окно победы всё равно открывается");
+        proceed(env.root);
+        await tick();
+        check(env.ended.length === 1 && env.ended[0].outcome === "won" && !env.combat.isActive, "сбой показа исхода: победа засчитана, бой завершён");
       }
 
       // Ошибка данных (у заклинания ведьмы нет банка вопросов защиты): игрока не запираем в бою.

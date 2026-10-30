@@ -27,6 +27,9 @@ import { SaveStore } from "../save/SaveStore";
 import { StealthManager } from "../stealth/StealthManager";
 import { detectAutoTier, getQuality, qualityFromUrl } from "./quality";
 import type { PlayerController } from "./PlayerController";
+import { PlayerReactions } from "./PlayerReactions";
+import type { ReactionState } from "./PlayerReactions";
+import { ProgressWatcher, countProgress } from "./progressWatcher";
 import type { GameManagers } from "./managers";
 import type { WorldStreamer } from "../world/WorldStreamer";
 import type { FogManager } from "../world/FogManager";
@@ -60,6 +63,10 @@ export class Game {
   private readonly autoSave: AutoSave;
   private readonly hud: GameManagers["hud"];
   private readonly combat: GameManagers["combat"];
+  private readonly learning: GameManagers["learning"];
+  private readonly reactions: PlayerReactions;
+  /** Состояние для реакций персонажа: один объект на всю игру, поля переписываются каждый кадр. */
+  private readonly reactionState: ReactionState = { menuOpen: false, inCombat: false, atBonfire: false, hidden: false, powerFraction: 1, section: 0 };
   private readonly battleStage: BabylonBattleStage;
   private readonly playerPower: GameManagers["playerPower"];
   private readonly anyMenuOpen: () => boolean;
@@ -111,6 +118,7 @@ export class Game {
     const managers = createManagers(uiRoot, gameState, cooldown, this.battleStage);
     this.hud = managers.hud;
     this.combat = managers.combat;
+    this.learning = managers.learning;
     this.playerPower = managers.playerPower;
     this.fps = new FpsCounter(uiRoot);
 
@@ -189,7 +197,19 @@ export class Game {
       },
     });
 
+    // Живые реакции персонажа: стена, костёр, «действие» без цели, стойка в бою, посадка у костра.
+    this.reactions = new PlayerReactions(player, {
+      activeBonfires: () => streamer.getActiveBonfires(),
+      activeWitches: () => streamer.getActiveWitches(),
+      activeChests: () => streamer.getActiveChests(),
+    });
+    // Радуется, когда у игрока что-то прибавилось (заклинание, барьер, книга или страница). Точка отсчёта —
+    // состояние на старте, поэтому загруженный прогресс радости не вызывает.
+    const progress = new ProgressWatcher(() => countProgress(gameState));
+    gameState.subscribe(() => this.reactions.onProgress(progress.poll()));
+
     const interaction = createInteraction({
+      reactions: this.reactions,
       managers,
       proximity,
       gameState,
@@ -265,7 +285,7 @@ export class Game {
   }
 
   private startRenderLoop(): void {
-    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, backpack, lootPresenter, stealth, hud, pause, combat, playerPower, battleStage } = this;
+    const { engine, scene, player, camera, streamer, fog, cooldown, proximity, mobile, owl, backpack, lootPresenter, stealth, hud, pause, combat, learning, reactions, reactionState, playerPower, battleStage } = this;
 
     engine.runRenderLoop(() => {
       // Пауза: мир стоит (никаких апдейтов), а сцена перерисовывается редко — только чтобы
@@ -321,6 +341,15 @@ export class Game {
       // и уже по свежим позициям проверяем, не началась ли встреча.
       stealth.update(dt, menuOpen);
       hud.setStealthBadge(stealth.isHidden ? "🌿 В укрытии — ведьмы тебя не видят" : null);
+
+      // Реакции персонажа — по свежему движению и стелсу: упёрся в стену, наступил на костёр, сидит у огня.
+      reactionState.menuOpen = menuOpen;
+      reactionState.inCombat = combat.isActive;
+      reactionState.atBonfire = learning.isActive;
+      reactionState.hidden = stealth.isHidden;
+      reactionState.powerFraction = playerPower.fraction;
+      reactionState.section = streamer.sectionAt(player.position.x, player.position.z);
+      reactions.update(dt, reactionState);
 
       proximity.update(menuOpen);
 
